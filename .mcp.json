@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "hubspot": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "set -a; source /home/hugo-zanni/Nexforce/Projects/handover-sienge/.env; HUBSPOT_ACCESS_TOKEN=$HUBSPOT_API_KEY; set +a; npx -y @hubspot/mcp-server@latest"
+      ]
+    }
+  }
+}

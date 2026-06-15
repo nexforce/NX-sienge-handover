@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Document {
+  id                String            @id @default(cuid())
+  nome              String
+  revisor           String
+  statusAtual       Status            @default(Pendente)
+  ultimaAtualizacao DateTime          @updatedAt
+  createdAt         DateTime          @default(now())
+  versions          DocumentVersion[]
+}
+
+model DocumentVersion {
+  id            String    @id @default(cuid())
+  documentId    String
+  document      Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  numeroVersao  String
+  linkDocumento String?
+  status        Status    @default(Pendente)
+  dataCriacao   DateTime  @default(now())
+  comments      Comment[]
+}
+
+model Comment {
+  id          String          @id @default(cuid())
+  versionId   String
+  version     DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  autor       String
+  mensagem    String
+  dataCriacao DateTime        @default(now())
+}
+
+enum Status {
+  Pendente
+  EmProgresso
+  UnderReview
+  ReviewRefused
+  ReviewApproved
+  Done
+}

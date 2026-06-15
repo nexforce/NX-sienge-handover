@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #0c0e0e;
+  --nexforce-black: #0c0e0e;
+  --nexforce-white: #ffffff;
+  --nexforce-dark-gray: #515151;
+  --nexforce-mid-gray: #777777;
+  --nexforce-light-gray: #9c9b9b;
+  --nexforce-navy: #303f63;
+  --nexforce-blue: #215a9f;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-lato);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Lato', sans-serif;
+}
