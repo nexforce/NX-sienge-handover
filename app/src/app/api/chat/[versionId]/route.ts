@@ -36,7 +36,14 @@ export async function POST(
   }
 
   const { versionId } = await params
-  const { message } = await req.json()
+
+  let body: { message?: string }
+  try {
+    body = await req.json()
+  } catch {
+    return new Response('Invalid JSON', { status: 400 })
+  }
+  const { message } = body
 
   if (!message?.trim()) {
     return new Response('message is required', { status: 400 })
@@ -53,11 +60,6 @@ export async function POST(
   if (!version) {
     return new Response('Version not found', { status: 404 })
   }
-
-  // Save user message to DB
-  await prisma.chatMessage.create({
-    data: { versionId, role: 'user', content: message },
-  })
 
   // Load process context
   const { systemPrompt, memoryContent, docContent } = await loadProcessContext(version.document.id)
@@ -78,6 +80,11 @@ export async function POST(
   const stream = new ReadableStream({
     async start(controller) {
       try {
+        // Save user message to DB (inside try so orphan is avoided on Anthropic failure)
+        await prisma.chatMessage.create({
+          data: { versionId, role: 'user', content: message },
+        })
+
         const response = anthropic.messages.stream({
           model: 'claude-sonnet-4-6',
           max_tokens: 4096,
