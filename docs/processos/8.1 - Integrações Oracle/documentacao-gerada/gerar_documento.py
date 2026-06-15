@@ -1,5 +1,6 @@
 """
 Gerador de documentação para o processo 8.1 - Integrações Oracle
+Versão: 2.0
 Executar: python3 gerar_documento.py
 """
 
@@ -87,7 +88,7 @@ def add_bullet(doc, text, level=0):
     return p
 
 
-def add_workflow_block(doc, nome, id_wf, objeto, disparo, acoes, dependencias=None, status="Ativo"):
+def add_workflow_block(doc, nome, id_wf, objetivo, objeto, disparo, acoes, dependencias=None, status="Ativo"):
     p = doc.add_paragraph()
     run = p.add_run(f"Workflow: {nome}")
     run.bold = True
@@ -97,6 +98,7 @@ def add_workflow_block(doc, nome, id_wf, objeto, disparo, acoes, dependencias=No
 
     rows_data = [
         ("ID", id_wf),
+        ("Objetivo", objetivo),
         ("Status", status),
         ("Objeto HubSpot", objeto),
         ("Disparo", disparo),
@@ -153,7 +155,7 @@ for section in doc.sections:
     section.right_margin  = Cm(2.5)
 
 insert_brand_header(doc, title="8.1 — Integrações Oracle", period="Junho 2026")
-insert_brand_footer(doc, confidentiality="Uso interno  ·  Nexforce Services  ·  v1.0")
+insert_brand_footer(doc, confidentiality="Uso interno  ·  Nexforce Services  ·  v2.0")
 
 # ════════════════════════════════════════════════════════
 # CAPA
@@ -184,7 +186,7 @@ meta_table = create_brand_table(
         ["Responsável pelo processo", "Vinicius Vanoni"],
         ["Empresa responsável", "Nexforce Services"],
         ["Data de documentação", "15 de junho de 2026"],
-        ["Versão", "1.0"],
+        ["Versão", "2.0"],
         ["Status do processo", "Estabilização pós Go Live"],
     ],
 )
@@ -308,7 +310,8 @@ for num, titulo, descricao in steps:
 # 3.2 Regras de Negócio
 add_heading(doc, "3.2 Regras de Negócio", level=2)
 
-regras = [
+# Regras 1 a 5
+regras_1_5 = [
     ("Regra 1 — Identificação do Grupo de Contrato",
      "O ID do Grupo de Contrato no HubSpot (nr_contrato_hs) é derivado do número de contrato Oracle aplicando "
      "a regex ^[^._]+ — captura tudo antes do primeiro ponto (.), underline (_) ou hífen (-). "
@@ -331,34 +334,14 @@ regras = [
      "Quando a propriedade sistema está vazia, é criado um único item genérico: "
      "'SaaS' (hs_sku: 44918051665) com o valor de prog_qtd_saas, "
      "ou 'Manutenção' (hs_sku: 39980447525) com o valor de prog_qtd_manutencao, conforme disponível."),
-    ("Regra 7 — Split de Conectores",
-     "O valor total de prog_qtd_connectors é distribuído proporcionalmente entre os produtos cujo nome começa com "
-     "'Conector' ou 'Connectors', usando o preço do catálogo HubSpot como peso — mesma lógica do split de módulos."),
-    ("Regra 8 — Anti-concorrência (execuções simultâneas)",
-     "O workflow usa dois mecanismos para evitar que múltiplas alterações simultâneas em prog_qtd_* causem execuções "
-     "paralelas e itens de linha duplicados: "
-     "(a) random delay de 1 a 19 segundos no início de cada execução; "
-     "(b) A/B test com 3 branches — uma executa imediatamente, outra aguarda 1 min, outra aguarda 2 min. "
-     "Isso distribui o tempo de início das execuções concorrentes."),
-    ("Regra 9 — Supressão de GCs cancelados",
-     "Grupos de Contrato com a propriedade status = 'Cancelado' são excluídos do enrollment. "
-     "O workflow não processa GCs de contratos encerrados."),
-    ("Regra 10 — Itens de linha do Negócio (Deal) não são afetados",
-     "O fluxo de integração Oracle opera exclusivamente sobre os itens de linha do Grupo de Contrato. "
-     "Os itens de linha do Negócio (Deal) nunca devem ser alterados por este processo."),
-    ("Regra 11 — Sem Split (quando saas/manutencao/connectors estão ausentes)",
-     "Quando nenhum dos valores prog_qtd_saas, prog_qtd_manutencao ou prog_qtd_connectors está preenchido, "
-     "o workflow executa o caminho 'Sem Split': cria itens de linha para todos os prog_qtd_* que tiverem valor, "
-     "usando lin_servico_desc_* como nome do item e prog_qtd_* como preço. "
-     "Neste caminho, os SKUs dos produtos conhecidos são aplicados via tabela estática."),
 ]
 
-for titulo, texto in regras:
+for titulo, texto in regras_1_5:
     add_para(doc, titulo, bold=True, color_key="primary_black")
     add_para(doc, texto, size=10.5, indent=True)
     doc.add_paragraph()
 
-# Regra 6 — tabela de serviços fixos
+# Regra 6 — tabela de serviços fixos (posição correta: entre Regra 5 e Regra 7)
 add_para(doc, "Regra 6 — Serviços com valor fixo (sem split por módulo)", bold=True, color_key="primary_black")
 add_para(doc,
     "Os seguintes serviços não passam por split proporcional — recebem o valor diretamente do prog_qtd correspondente:",
@@ -378,6 +361,35 @@ t6 = create_brand_table(doc,
 )
 set_col_widths(t6, [10, 8])
 doc.add_paragraph()
+
+# Regras 7 a 11
+regras_7_11 = [
+    ("Regra 7 — Split de Conectores",
+     "O valor total de prog_qtd_connectors é distribuído proporcionalmente entre os produtos cujo nome começa com "
+     "'Conector' ou 'Connectors', usando o preço do catálogo HubSpot como peso — mesma lógica do split de módulos."),
+    ("Regra 8 — Anti-concorrência (execuções simultâneas)",
+     "O workflow usa dois mecanismos para evitar que múltiplas alterações simultâneas em prog_qtd_* causem execuções "
+     "paralelas e itens de linha duplicados: "
+     "(a) random delay de 1 a 19 segundos no início de cada execução; "
+     "(b) A/B test com 3 branches — uma executa imediatamente, outra aguarda 1 min, outra aguarda 2 min. "
+     "Isso distribui o tempo de início das execuções concorrentes."),
+    ("Regra 9 — Supressão de GCs cancelados",
+     "Grupos de Contrato com a propriedade status = 'Cancelado' são excluídos do enrollment. "
+     "O workflow não processa GCs de contratos encerrados."),
+    ("Regra 10 — Itens de linha do Negócio (Deal) não são afetados",
+     "O fluxo de integração Oracle opera exclusivamente sobre os itens de linha do Grupo de Contrato. "
+     "Os itens de linha do Negócio (Deal) nunca devem ser alterados por este processo."),
+    ("Regra 11 — Sem Split (quando saas/manutencao/connectors estão ausentes)",
+     "Quando nenhum dos valores prog_qtd_saas, prog_qtd_manutencao ou prog_qtd_connectors está preenchido, "
+     "o workflow executa o caminho 'Sem Split': cria itens de linha para todos os prog_qtd_* que tiverem valor, "
+     "usando as propriedades lin_servico_desc_* do GC como nome do item e prog_qtd_* como preço. "
+     "Neste caminho, os SKUs dos produtos conhecidos são aplicados via tabela estática."),
+]
+
+for titulo, texto in regras_7_11:
+    add_para(doc, titulo, bold=True, color_key="primary_black")
+    add_para(doc, texto, size=10.5, indent=True)
+    doc.add_paragraph()
 
 # 3.3 Critério de Validação
 add_heading(doc, "3.3 Critério de Validação", level=2)
@@ -406,8 +418,8 @@ t41 = create_brand_table(doc,
         ["Grupo de Contrato", "2-54707985", "Objeto central. Recebe os valores Oracle (prog_qtd_*) e tem seus itens de linha reconstruídos."],
         ["Contrato", "2-54707915", "Propaga prog_qtd_* para o GC quando um novo contrato é criado."],
         ["Line Items (Itens de Linha)", "0-8 (line_items)", "São arquivados e recriados a cada execução do workflow de split."],
-        ["Empresa (Company)", "0-2", "Associada ao GC. O [DEV] Integração Oracle em Company é um workflow auxiliar de desenvolvimento."],
-        ["Portfólio", "2-54708014", "Recebe atualização de itens de linha via workflow separado após alterações no GC."],
+        ["Empresa (Company)", "0-2", "Associada ao GC. É o objeto a partir do qual o Portfólio é criado."],
+        ["Portfólio", "2-54708014", "Associado ao GC. Recebe agregação de itens de linha via cluster de workflows Portfólio. O workflow [03.01] de atualização direta do GC está atualmente desabilitado (ver Pontos a Validar)."],
     ],
 )
 set_col_widths(t41, [4.5, 3.5, 9.5])
@@ -416,7 +428,8 @@ doc.add_paragraph()
 # 4.2 Propriedades Críticas
 add_heading(doc, "4.2 Propriedades Críticas", level=2)
 
-add_para(doc, "Propriedades de Integração Oracle (grupo: integração_oracle)", bold=True, color_key="navy")
+add_para(doc, "Propriedades de valores Oracle — prog_qtd_* (grupo: integração_oracle)", bold=True, color_key="navy")
+add_para(doc, "Cada propriedade armazena o valor mensal faturado pelo Oracle para o tipo de serviço correspondente.", size=10, indent=True)
 t42a = create_brand_table(doc,
     ["Propriedade HubSpot", "Tipo", "Origem / Finalidade"],
     [
@@ -445,8 +458,37 @@ t42a = create_brand_table(doc,
 set_col_widths(t42a, [7.5, 2.5, 7.5])
 doc.add_paragraph()
 
-add_para(doc, "Propriedades de controle e resultado (grupo: grupos_de_contrato_information)", bold=True, color_key="navy")
+add_para(doc, "Propriedades de descrição Oracle — lin_servico_desc_* (grupo: integração_oracle)", bold=True, color_key="navy")
+add_para(doc,
+    "Armazenam o texto descritivo do serviço retornado pelo Oracle. Usadas pelo workflow de Split no caminho 'Sem Split' "
+    "como nome do item de linha criado (Regra 11). Confirmadas no schema do Grupo de Contrato via MCP em 15/06/2026.",
+    size=10, indent=True
+)
 t42b = create_brand_table(doc,
+    ["Propriedade HubSpot", "Valor típico (Oracle)", "Uso"],
+    [
+        ["lin_servico_desc_saas", "SAAS", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_manutencao", "MANUTENCAO", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_apis", "APIs", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_connectors", "CONNECTORS", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_consultoria", "CONSULTORIA", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_locacao_de_data_center", "LOCACAO DE DATA CENTER", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_base_de_testes", "BASE DE TESTES", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_ecustos_integracao", "ECUSTOS INTEGRAÇÃO", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_nota_fiscal_eletronica", "NOTA FISCAL ELETRONICA", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_nota_fiscal_de_servico", "NOTA FISCAL DE SERVICO", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_emissao_de_conhecimento_de_transporte_eletronico_cte", "EMISSAO DE CTe", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_intermediacao", "INTERMEDIACAO", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_desenvolvimento_fabrica_de_desenvolvimento", "DESENVOLVIMENTO (FABRICA)", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_licenca_de_uso_base_client_share", "LICENCA DE USO BASE (CLIENT SHARE)", "Nome do item no caminho Sem Split"],
+        ["lin_servico_desc_hs", "variável", "Campo genérico de descrição (primeira ocorrência Oracle)"],
+    ],
+)
+set_col_widths(t42b, [7.5, 3.5, 6.5])
+doc.add_paragraph()
+
+add_para(doc, "Propriedades de controle e resultado (grupo: grupos_de_contrato_information)", bold=True, color_key="navy")
+t42c = create_brand_table(doc,
     ["Propriedade HubSpot", "Tipo", "Finalidade"],
     [
         ["mrr_oficial", "number", "MRR calculado do GC — alimentado por workflow secundário"],
@@ -458,7 +500,7 @@ t42b = create_brand_table(doc,
         ["status", "enumeration", "Ativo ou Cancelado. GCs Cancelados são suprimidos da integração Oracle."],
     ],
 )
-set_col_widths(t42b, [7.5, 2.5, 7.5])
+set_col_widths(t42c, [7.5, 2.5, 7.5])
 doc.add_paragraph()
 
 # 4.3 Workflows
@@ -468,6 +510,7 @@ add_workflow_block(
     doc,
     nome="[DEV] Integração Oracle — Grupo de Contrato",
     id_wf="1758086000",
+    objetivo="Autenticar no Oracle ERP, consultar os valores de contrato do dia e gravar nas propriedades prog_qtd_* do Grupo de Contrato correspondente.",
     objeto="Grupo de Contrato (2-54707985)",
     disparo="Agendado diariamente às 03:30h (schedule). Re-enrollment ativo.",
     acoes=(
@@ -480,7 +523,8 @@ add_workflow_block(
     ),
     dependencias=(
         "Enrollment atual: um único GC específico (hs_object_id 45054877487) — configuração de desenvolvimento. "
-        "O mecanismo de atualização em massa das propriedades prog_qtd_* nos GCs de produção não está mapeado no HubSpot via MCP."
+        "O mecanismo de atualização em massa das propriedades prog_qtd_* nos GCs de produção não está mapeado no HubSpot via MCP. "
+        "Ver PV-01."
     ),
     status="Ativo (DEV)"
 )
@@ -489,6 +533,7 @@ add_workflow_block(
     doc,
     nome="[01. Integração Oracle - Grupo de Contrato] Split de serviços em itens de linha (v03)",
     id_wf="1785580697",
+    objetivo="Reconstruir os itens de linha do Grupo de Contrato refletindo os valores Oracle atualizados, distribuindo proporcionalmente por módulo/sistema quando aplicável.",
     objeto="Grupo de Contrato (2-54707985)",
     disparo=(
         "Re-enrollment ativo. Disparado por qualquer alteração em qualquer propriedade prog_qtd_* ou na propriedade sistema. "
@@ -508,7 +553,7 @@ add_workflow_block(
         "   — Contrato misto SaaS+MM: itens de sistema (valor SaaS) + item 'Manutenção Mensal' separado.\n"
         "   — Sem sistemas: item único 'SaaS' ou 'Manutenção' com valor total.\n"
         "7. Branch 'Sem Split' (demais casos):\n"
-        "   — Cria item por prog_qtd_* não nulo, usando lin_servico_desc_* como nome e prog_qtd como preço."
+        "   — Cria item por prog_qtd_* não nulo, usando lin_servico_desc_* do GC como nome e prog_qtd como preço."
     ),
     dependencias=(
         "Requer que sistema esteja preenchido para split proporcional. "
@@ -521,6 +566,7 @@ add_workflow_block(
     doc,
     nome="[02.03. Contratos] Novo contrato criado → Cria ou Associa à um Grupo de Contrato + Replica Itens de Linha",
     id_wf="1744643667",
+    objetivo="Criar ou associar o Grupo de Contrato correto quando um novo Contrato é registrado, propagando os valores iniciais de prog_qtd_* e os itens de linha elegíveis.",
     objeto="Contrato (2-54707915)",
     disparo=(
         "Criação de Contrato com tipo_de_orcamento = 'Primeira Venda', 'Aditivo de Retração' ou 'Aditivo de Expansão'. "
@@ -546,6 +592,7 @@ add_workflow_block(
     doc,
     nome="[04.04.01] Valor Serviço / [04.04.02] Valor SaaS / [04.04.03] MM LU / [04.04.04] Data Center LU",
     id_wf="1789582978 / 1789452035 / 1789589316 / 1789539100",
+    objetivo="Atualizar os campos financeiros consolidados do GC (MRR, Valor SaaS, Valor Serviço, MM LU, DC LU) após cada sync Oracle.",
     objeto="Grupo de Contrato (2-54707985)",
     disparo="Atualização em prog_qtd_*. Re-enrollment ativo.",
     acoes=(
@@ -558,8 +605,93 @@ add_workflow_block(
     dependencias="Executam em cascata após atualização dos prog_qtd_*."
 )
 
+add_para(doc, "Cluster de workflows — Portfólio", bold=True, size=12, color_key="primary_black")
+add_para(doc,
+    "O Portfólio é gerenciado por um cluster de workflows identificados no HubSpot. O workflow [03.01] que atualizava o Portfólio "
+    "diretamente a partir de alterações no GC está atualmente desabilitado — ver PV-07.",
+    size=10.5
+)
+doc.add_paragraph()
+
+add_workflow_block(
+    doc,
+    nome="[01 - Portfólio] Empresa = Cliente → Cria portfólio",
+    id_wf="1769155744",
+    objetivo="Criar um registro de Portfólio no HubSpot quando uma Empresa é marcada como cliente.",
+    objeto="Empresa (0-2)",
+    disparo="Empresa com status = cliente.",
+    acoes="Cria um registro de Portfólio associado à Empresa.",
+    dependencias="Pré-condição para os demais workflows do cluster Portfólio."
+)
+
+add_workflow_block(
+    doc,
+    nome="[02.03 - Portfólio] Grupo de contrato = Criado → Associa a Portfólio",
+    id_wf="1769330228",
+    objetivo="Garantir que cada Grupo de Contrato criado seja associado ao Portfólio correto da Empresa.",
+    objeto="Grupo de Contrato (2-54707985)",
+    disparo="Criação de Grupo de Contrato.",
+    acoes="Associa o GC ao Portfólio da Empresa vinculada.",
+    dependencias="Requer que o Portfólio da Empresa já exista ([01 - Portfólio])."
+)
+
+add_workflow_block(
+    doc,
+    nome="[03.01 - Portfólio] Item de linha = Atualizado → Atualiza Portfólio",
+    id_wf="1769611663",
+    objetivo="Propagar as atualizações de itens de linha do GC para o Portfólio associado após cada sync Oracle.",
+    objeto="Grupo de Contrato (2-54707985)",
+    disparo="Atualização de item de linha no GC.",
+    acoes="Atualiza o Portfólio com os novos valores dos itens de linha do GC.",
+    dependencias="Depende do Split workflow ter reconstruído os itens de linha do GC. Ver PV-07.",
+    status="Desabilitado"
+)
+
+add_workflow_block(
+    doc,
+    nome="[04.01 - Portfólio] Item de linha = Adicionado → Unifica Portfólio",
+    id_wf="1769641515",
+    objetivo="Consolidar no Portfólio os itens de linha adicionados, garantindo visão unificada do portfólio do cliente.",
+    objeto="Portfólio (2-54708014)",
+    disparo="Item de linha adicionado ao Portfólio.",
+    acoes="Unifica os itens de linha no Portfólio.",
+    dependencias="Depende da associação GC→Portfólio estar ativa."
+)
+
+add_workflow_block(
+    doc,
+    nome="[04.02 - Portfólio] Item de linha = Atualizado → Preenche MultipleCheckbox",
+    id_wf="1769675174",
+    objetivo="Manter os campos de múltipla seleção do Portfólio atualizados com base nos itens de linha existentes.",
+    objeto="Portfólio (2-54708014)",
+    disparo="Atualização de item de linha no Portfólio.",
+    acoes="Preenche propriedades MultipleCheckbox do Portfólio com base nos itens de linha atualizados.",
+    dependencias="Depende de itens de linha estarem associados ao Portfólio."
+)
+
 # 4.4 Integração Oracle
 add_heading(doc, "4.4 Integração Oracle", level=2)
+
+add_para(doc, "Visão geral da integração", bold=True, color_key="navy")
+t44_resumo = create_brand_table(doc,
+    ["Dimensão", "Detalhe"],
+    [
+        ["Entrada",
+         "Dados Oracle via API REST consumida diariamente: nr_contrato, lin_servico (código), lin_servico_desc (texto), "
+         "prog_qtd (valor) por cliente/contrato. Autenticação via POST com ORACLE_USERNAME / ORACLE_PASSWORD."],
+        ["Saída",
+         "Propriedades prog_qtd_* gravadas no Grupo de Contrato correspondente. Itens de linha do GC arquivados (delete-all) "
+         "e recriados com os valores atualizados a cada execução."],
+        ["Objeto impactado",
+         "Grupo de Contrato (2-54707985) — propriedades prog_qtd_* e lin_servico_desc_*. "
+         "Line Items (0-8) — arquivados e recriados. Portfólio (2-54708014) — via cluster de workflows (condicionado a PV-07)."],
+        ["Risco principal",
+         "Falha de autenticação Oracle (credenciais expiradas ou API indisponível) deixa todos os GCs desatualizados "
+         "silenciosamente. sync_status_hs registra o erro mas não há alerta automático confirmado (ver PV-05)."],
+    ],
+)
+set_col_widths(t44_resumo, [4, 13.5])
+doc.add_paragraph()
 
 add_para(doc, "Endpoints:")
 t44a = create_brand_table(doc,
@@ -637,7 +769,12 @@ t5 = create_brand_table(doc,
          "Alinhado com Sienge que é aceitável — Oracle reflete faturamento real, não valor negociado."],
         ["Workflow [DEV] Integração Oracle em GC apenas com um GC específico no enrollment",
          "O mecanismo real de atualização em massa das propriedades prog_qtd_* nos GCs de produção não está totalmente documentado.",
-         "Ponto a validar. Pode haver middleware externo (não HubSpot) responsável pela sync em produção."],
+         "Ponto a validar. Pode haver middleware externo (não HubSpot) responsável pela sync em produção. Ver PV-01."],
+        ["Divergência entre documento de orientação e implementação real",
+         "O documento 'Orientações integração Oracle → HubSpot' (drive/) previa sincronização incremental (não delete-all global). "
+         "A implementação confirmada no HubSpot usa delete-all + recreate a cada execução. "
+         "Não é erro — é decisão de implementação adotada para reduzir complexidade de reconciliação.",
+         "Documentado aqui. O HubSpot é a fonte de verdade. O documento de orientação original está desatualizado neste ponto."],
     ],
 )
 set_col_widths(t5, [5.5, 5, 7])
@@ -659,6 +796,7 @@ t6mat = create_brand_table(doc,
         ["Ticket ClickUp", "86ba8pa3r — Valor Final Serviços não preenchida no Negócio", "ClickUp — projeto Sienge RaaS (in progress)"],
         ["Workflow HubSpot", "Split de serviços em itens de linha (v03)", "HubSpot Portal 50102745 — id 1785580697"],
         ["Workflow HubSpot", "[DEV] Integração Oracle — Grupo de Contrato", "HubSpot Portal 50102745 — id 1758086000"],
+        ["Workflow HubSpot", "[03.01 - Portfólio] Item de linha = Atualizado → Atualiza Portfólio (desabilitado)", "HubSpot Portal 50102745 — id 1769611663"],
     ],
 )
 set_col_widths(t6mat, [3, 8, 6.5])
@@ -679,10 +817,12 @@ doc.add_paragraph()
 t7 = create_brand_table(doc,
     ["ID", "Ponto", "Detalhe"],
     [
-        ["PV-01", "Mecanismo real de sync em produção",
-         "O workflow [DEV] Integração Oracle (id 1758086000) está com enrollment em um único GC específico (id 45054877487). "
-         "Como ocorre a atualização das propriedades prog_qtd_* nos demais Grupos de Contrato em produção? "
-         "Existe middleware externo? Há outro workflow não mapeado?"],
+        ["PV-01", "Mecanismo real de sync em produção (CRÍTICO)",
+         "O workflow [DEV] Integração Oracle (id 1758086000) está configurado com enrollment em 1 único GC de desenvolvimento "
+         "(id 45054877487). O mecanismo que atualiza as propriedades prog_qtd_* em todos os demais Grupos de Contrato em "
+         "produção não foi identificado durante as consultas ao HubSpot. Hipóteses: (a) middleware externo ao HubSpot não "
+         "visível via MCP; (b) workflow adicional não encontrado; (c) sistema externo que chama o workflow por GC "
+         "individualmente. Requer confirmação de Vinicius Vanoni antes da publicação deste documento."],
         ["PV-02", "Valores exatos do campo sistema",
          "O campo sistema é um multiple checkbox no GC. Os valores cadastrados correspondem exatamente aos nomes dos produtos "
          "no catálogo HubSpot (ex: 'Contas a Pagar', 'Vendas')? "
@@ -695,6 +835,18 @@ t7 = create_brand_table(doc,
         ["PV-05", "Alertas de falha na sync Oracle",
          "Quando a autenticação Oracle falha ou a API retorna erro, existe algum alerta automático (e-mail, Slack, HubSpot notification)? "
          "Ou a detecção depende de monitoramento manual do campo sync_status_hs?"],
+        ["PV-06", "Anuentes — relação com integração Oracle",
+         "O tema 'anuentes' aparece em 3 tarefas das 46 do processo 8.1 no ClickUp (86babq5xx — distribuição de percentuais; "
+         "86ba4my8a — visualização de vínculos; 86b9wktxz — ajuste HubDB). Nenhuma tarefa conecta anuentes à integração Oracle "
+         "(sync de prog_qtd_*, autenticação, mapeamento de contratos). Não foi identificado impacto direto na integração Oracle. "
+         "Requer confirmação de Vinicius Vanoni se há propriedades de anuentes sendo sincronizadas do Oracle para o HubSpot."],
+        ["PV-07", "Workflow [03.01 - Portfólio] desabilitado — GC→Portfólio sync ativo?",
+         "O workflow [03.01 - Portfólio] Item de linha = Atualizado → Atualiza Portfólio (id 1769611663, objeto GC) está "
+         "desabilitado no HubSpot. Este era o mecanismo que propagava alterações de itens de linha do GC para o Portfólio "
+         "após cada sync Oracle. Os workflows [04.01] e [04.02] (objeto Portfólio, ativos) respondem a eventos de itens de "
+         "linha no Portfólio. Confirmar com Vinicius Vanoni: (a) o [03.01] foi substituído por outro mecanismo? "
+         "(b) os itens de linha do GC estão sendo propagados para o Portfólio por alguma outra rota? "
+         "(c) ou o Portfólio está atualmente sem atualização automática após sync Oracle?"],
     ],
 )
 set_col_widths(t7, [1.5, 4.5, 11.5])

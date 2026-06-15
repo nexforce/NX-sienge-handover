@@ -1,0 +1,22 @@
+project_version: 2.3
+project_name: meta-agent
+created_with_meta_agent: bootstrap (self)
+last_optimized_with_meta_agent: 2.3
+created_on: 2026-05-15
+last_optimized_on: 2026-05-28
+
+# Version history (mapped from MEMORY.md [PIN] entries):
+# V1.0 (2026-05-15): Initial build
+# V1.1 (2026-05-16): Hooks + memory layer
+# V1.2 (2026-05-16): quality-reviewer subagent
+# V1.3 (2026-05-16): canonical structure, EN-only, token-budget
+# V1.4 (2026-05-28): feedback loop, skill-suggester, versioning, scheduled actions
+# V1.5 (2026-05-28): compress CLAUDE.md, global promotion to About Me/
+# V1.6 (2026-05-28): About Me/ scoping fix, eval review
+# V1.7 (2026-05-28): Language audit PT to EN, 4 spec tightening
+# V1.8 (2026-05-28): LANGUAGE RULE as HARD CONSTRAINT
+# V1.9 (2026-05-28): Removed banned-word lists, added creation checklists
+# V2.0 (2026-05-28): Skills+templates audit, gaps closed
+# V2.1 (2026-05-28): Rename claude-engineer to meta-agent
+# V2.2 (2026-05-28): manage-versions skill, project-level versioning across 3 tiers
+# V2.3 (2026-05-28): auto-correct skill, real-time self-correction protocol
