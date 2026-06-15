@@ -66,11 +66,14 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid plan format' }, { status: 400 })
   }
 
+  if (plan.changes.length === 0) {
+    return NextResponse.json({ error: 'O plano não contém mudanças.' }, { status: 400 })
+  }
+
   const version = await prisma.documentVersion.findUnique({
     where: { id: versionId },
     include: {
       document: true,
-      chatMessages: { orderBy: { createdAt: 'asc' }, select: { role: true, content: true } },
     },
   })
 
@@ -124,9 +127,8 @@ export async function POST(
     where: { documentId: version.documentId },
     orderBy: { dataCriacao: 'desc' },
   })
-  const nextNum = lastVersion
-    ? parseInt(lastVersion.numeroVersao.replace('V', '')) + 1
-    : 1
+  const parsed = lastVersion ? parseInt(lastVersion.numeroVersao.replace('V', ''), 10) : NaN
+  const nextNum = Number.isFinite(parsed) ? parsed + 1 : 1
 
   // Create new DocumentVersion with file binary in DB
   const newVersion = await prisma.documentVersion.create({
