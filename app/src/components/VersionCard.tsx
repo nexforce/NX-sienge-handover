@@ -3,17 +3,10 @@
 import { useState } from 'react'
 import { Status } from '@prisma/client'
 import { StatusBadge } from './StatusBadge'
-import { CommentThread } from './CommentThread'
+import { AgentChat } from './AgentChat'
 import { DocxPreviewModal } from './DocxPreviewModal'
 import { formatDate } from '@/lib/format'
 import { allStatuses, statusConfig } from '@/lib/status'
-
-interface Comment {
-  id: string
-  autor: string
-  mensagem: string
-  dataCriacao: Date
-}
 
 interface VersionCardProps {
   id: string
@@ -21,10 +14,7 @@ interface VersionCardProps {
   linkDocumento?: string
   status: Status
   dataCriacao: Date
-  comments: Comment[]
   onStatusChange: (status: Status) => Promise<void>
-  onAddComment: (mensagem: string) => Promise<void>
-  onDeleteComment: (commentId: string) => Promise<void>
 }
 
 export function VersionCard({
@@ -33,10 +23,7 @@ export function VersionCard({
   linkDocumento,
   status,
   dataCriacao,
-  comments,
   onStatusChange,
-  onAddComment,
-  onDeleteComment,
 }: VersionCardProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [statusLoading, setStatusLoading] = useState(false)
@@ -78,23 +65,14 @@ export function VersionCard({
                 <span className="text-xl">📄</span>
               </div>
               <div className="flex-1 min-w-0">
-                <p
-                  className="text-xs font-bold text-[#0C0E0E] truncate"
-                  style={{ fontFamily: "'Lato', sans-serif" }}
-                >
+                <p className="text-xs font-bold text-[#0C0E0E] truncate" style={{ fontFamily: "'Lato', sans-serif" }}>
                   {numeroVersao}
                 </p>
-                <p
-                  className="text-xs text-[#777777]"
-                  style={{ fontFamily: "'Lato', sans-serif" }}
-                >
+                <p className="text-xs text-[#777777]" style={{ fontFamily: "'Lato', sans-serif" }}>
                   Clique para visualizar
                 </p>
               </div>
-              <span
-                className="text-xs text-[#215A9F] font-medium flex-shrink-0"
-                style={{ fontFamily: "'Lato', sans-serif" }}
-              >
+              <span className="text-xs text-[#215A9F] font-medium flex-shrink-0" style={{ fontFamily: "'Lato', sans-serif" }}>
                 Abrir →
               </span>
             </button>
@@ -127,12 +105,12 @@ export function VersionCard({
         </label>
         <select
           value={status}
-          onChange={(e) => handleStatusChange(e.target.value as Status)}
+          onChange={e => handleStatusChange(e.target.value as Status)}
           disabled={statusLoading}
           className="w-full px-2 py-1 text-xs border border-[#9C9B9B] rounded focus:outline-none focus:ring-2 focus:ring-[#215A9F] disabled:opacity-50 text-[#515151]"
           style={{ fontFamily: "'Lato', sans-serif" }}
         >
-          {allStatuses.map((s) => (
+          {allStatuses.map(s => (
             <option key={s} value={s}>
               {statusConfig[s].label}
             </option>
@@ -145,12 +123,12 @@ export function VersionCard({
         className="w-full text-left px-2 py-1 text-sm text-[#215A9F] hover:underline"
         style={{ fontFamily: "'Lato', sans-serif" }}
       >
-        {isExpanded ? '▼ Ocultar comentários' : `▶ Ver comentários (${comments.length})`}
+        {isExpanded ? '▼ Ocultar agente' : '▶ Abrir agente de revisão'}
       </button>
 
       {isExpanded && (
         <div className="mt-4 pt-4 border-t border-[#9C9B9B]">
-          <CommentThread comments={comments} onAddComment={onAddComment} onDeleteComment={onDeleteComment} />
+          <AgentChat versionId={id} />
         </div>
       )}
     </div>
