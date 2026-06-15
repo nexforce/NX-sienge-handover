@@ -77,18 +77,29 @@ export async function POST(
     },
   ]
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2048,
-    system: fullSystem,
-    messages,
-    tools: [PLAN_TOOL],
-    tool_choice: { type: 'any' },
-  })
+  let response: Anthropic.Message
+  try {
+    response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: fullSystem,
+      messages,
+      tools: [PLAN_TOOL],
+      tool_choice: { type: 'tool', name: 'submit_plan' },
+    })
+  } catch (err) {
+    console.error('[plan] Anthropic API error:', err)
+    return NextResponse.json({ error: 'Falha ao gerar plano. Tente novamente.' }, { status: 500 })
+  }
 
   const toolUse = response.content.find(b => b.type === 'tool_use')
   if (!toolUse || toolUse.type !== 'tool_use') {
     return NextResponse.json({ error: 'Agente não gerou um plano estruturado.' }, { status: 500 })
+  }
+
+  const input = toolUse.input as { title?: unknown; changes?: unknown }
+  if (!input.title || !Array.isArray(input.changes)) {
+    return NextResponse.json({ error: 'Plano gerado com formato inválido.' }, { status: 500 })
   }
 
   return NextResponse.json(toolUse.input)
