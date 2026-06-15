@@ -13,11 +13,6 @@ export async function GET(
     include: {
       versions: {
         orderBy: { dataCriacao: 'desc' },
-        include: {
-          comments: {
-            orderBy: { dataCriacao: 'desc' },
-          },
-        },
       },
     },
   })
