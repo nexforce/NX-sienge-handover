@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Status } from '@prisma/client'
 import { StatusBadge } from './StatusBadge'
 import { CommentThread } from './CommentThread'
+import { DocxPreviewModal } from './DocxPreviewModal'
 import { formatDate } from '@/lib/format'
 import { allStatuses, statusConfig } from '@/lib/status'
 
@@ -22,7 +23,8 @@ interface VersionCardProps {
   dataCriacao: Date
   comments: Comment[]
   onStatusChange: (status: Status) => Promise<void>
-  onAddComment: (autor: string, mensagem: string) => Promise<void>
+  onAddComment: (mensagem: string) => Promise<void>
+  onDeleteComment: (commentId: string) => Promise<void>
 }
 
 export function VersionCard({
@@ -34,9 +36,13 @@ export function VersionCard({
   comments,
   onStatusChange,
   onAddComment,
+  onDeleteComment,
 }: VersionCardProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [statusLoading, setStatusLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+
+  const isLocalFile = linkDocumento?.startsWith('/api/files/')
 
   const handleStatusChange = async (newStatus: Status) => {
     setStatusLoading(true)
@@ -63,16 +69,56 @@ export function VersionCard({
 
       {linkDocumento && (
         <div className="mb-3">
-          <a
-            href={linkDocumento}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[#215A9F] text-sm hover:underline break-all"
-            style={{ fontFamily: "'Lato', sans-serif" }}
-          >
-            📄 Abrir documento
-          </a>
+          {isLocalFile ? (
+            <button
+              onClick={() => setPreviewOpen(true)}
+              className="w-full flex items-center gap-3 p-3 bg-[#F5F5F5] border border-[#9C9B9B] rounded-md hover:border-[#215A9F] hover:bg-blue-50 transition-colors text-left group"
+            >
+              <div className="flex-shrink-0 w-10 h-12 bg-white border border-[#9C9B9B] rounded flex items-center justify-center shadow-sm group-hover:shadow">
+                <span className="text-xl">📄</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p
+                  className="text-xs font-bold text-[#0C0E0E] truncate"
+                  style={{ fontFamily: "'Lato', sans-serif" }}
+                >
+                  {numeroVersao}
+                </p>
+                <p
+                  className="text-xs text-[#777777]"
+                  style={{ fontFamily: "'Lato', sans-serif" }}
+                >
+                  Clique para visualizar
+                </p>
+              </div>
+              <span
+                className="text-xs text-[#215A9F] font-medium flex-shrink-0"
+                style={{ fontFamily: "'Lato', sans-serif" }}
+              >
+                Abrir →
+              </span>
+            </button>
+          ) : (
+            <a
+              href={linkDocumento}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#215A9F] text-sm hover:underline break-all"
+              style={{ fontFamily: "'Lato', sans-serif" }}
+            >
+              📄 Abrir documento
+            </a>
+          )}
         </div>
+      )}
+
+      {linkDocumento && isLocalFile && (
+        <DocxPreviewModal
+          url={linkDocumento}
+          title={numeroVersao}
+          isOpen={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+        />
       )}
 
       <div className="mb-3">
@@ -104,7 +150,7 @@ export function VersionCard({
 
       {isExpanded && (
         <div className="mt-4 pt-4 border-t border-[#9C9B9B]">
-          <CommentThread comments={comments} onAddComment={onAddComment} />
+          <CommentThread comments={comments} onAddComment={onAddComment} onDeleteComment={onDeleteComment} />
         </div>
       )}
     </div>

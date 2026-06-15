@@ -84,16 +84,21 @@ export default function DocumentPage({ params }: { params: Promise<{ id: string[
     }
   }
 
-  const handleAddComment = async (versionId: string, autor: string, mensagem: string) => {
+  const handleDeleteComment = async (commentId: string) => {
+    try {
+      await fetch(`/api/comments/${commentId}`, { method: 'DELETE' })
+      await fetchDocument()
+    } catch (error) {
+      console.error('Failed to delete comment:', error)
+    }
+  }
+
+  const handleAddComment = async (versionId: string, mensagem: string) => {
     try {
       await fetch('/api/comments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          versionId,
-          autor,
-          mensagem,
-        }),
+        body: JSON.stringify({ versionId, mensagem }),
       })
       await fetchDocument()
     } catch (error) {
@@ -180,7 +185,8 @@ export default function DocumentPage({ params }: { params: Promise<{ id: string[
                   dataCriacao: new Date(c.dataCriacao),
                 }))}
                 onStatusChange={(status) => handleStatusChange(version.id, status)}
-                onAddComment={(autor, mensagem) => handleAddComment(version.id, autor, mensagem)}
+                onAddComment={(mensagem) => handleAddComment(version.id, mensagem)}
+                onDeleteComment={handleDeleteComment}
               />
             ))
           )}

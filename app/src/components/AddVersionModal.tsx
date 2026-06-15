@@ -18,7 +18,7 @@ export function AddVersionModal({
   onSubmit,
 }: AddVersionModalProps) {
   const [linkDocumento, setLinkDocumento] = useState('')
-  const [status, setStatus] = useState(Status.Pendente)
+  const [status, setStatus] = useState<Status>(Status.Pendente)
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import { Status } from "@prisma/client";
 import { MetricsBar } from "@/components/MetricsBar";
 import { DocumentCard } from "@/components/DocumentCard";
 
@@ -9,7 +10,7 @@ interface Document {
   id: string;
   nome: string;
   revisor: string;
-  statusAtual: string;
+  statusAtual: Status;
   ultimaAtualizacao: string;
 }
 

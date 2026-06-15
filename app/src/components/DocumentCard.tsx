@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Status } from '@prisma/client'
 import { StatusBadge } from './StatusBadge'
 import { formatDistanceToNow } from '@/lib/format'
 
@@ -6,7 +7,7 @@ interface DocumentCardProps {
   id: string
   nome: string
   revisor: string
-  statusAtual: string
+  statusAtual: Status
   ultimaAtualizacao: string
 }
 
