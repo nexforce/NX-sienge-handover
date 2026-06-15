@@ -55,8 +55,8 @@ export function AgentChat({ versionId }: AgentChatProps) {
     }
   }
 
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault()
+  async function handleSend(e?: React.FormEvent) {
+    e?.preventDefault()
     if (!input.trim() || streaming) return
     const text = input.trim()
     setInput('')
@@ -79,13 +79,17 @@ export function AgentChat({ versionId }: AgentChatProps) {
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
+      let buffer = ''
       let accumulated = ''
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value, { stream: true })
-        for (const line of chunk.split('\n')) {
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        // Keep the last (potentially incomplete) line in the buffer
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue
           const data = line.slice(6)
           if (data === '[DONE]') break
@@ -97,8 +101,8 @@ export function AgentChat({ versionId }: AgentChatProps) {
               setStreamingText(accumulated)
             }
           } catch (parseErr) {
-            // skip malformed SSE lines
-            if ((parseErr as Error).message?.includes('Falha') || (parseErr as Error).message?.includes('Erro')) {
+            // Only rethrow intentional server errors, skip JSON parse failures
+            if ((parseErr as Error).message && !(parseErr instanceof SyntaxError)) {
               throw parseErr
             }
           }
@@ -260,7 +264,7 @@ export function AgentChat({ versionId }: AgentChatProps) {
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              handleSend(e as unknown as React.FormEvent)
+              void handleSend()
             }
           }}
           placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)"
