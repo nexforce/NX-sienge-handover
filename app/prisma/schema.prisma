@@ -18,23 +18,29 @@ model Document {
 }
 
 model DocumentVersion {
-  id            String    @id @default(cuid())
+  id            String        @id @default(cuid())
   documentId    String
-  document      Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document      Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
   numeroVersao  String
   linkDocumento String?
-  status        Status    @default(Pendente)
-  dataCriacao   DateTime  @default(now())
-  comments      Comment[]
+  fileContent   Bytes?
+  status        Status        @default(Pendente)
+  dataCriacao   DateTime      @default(now())
+  chatMessages  ChatMessage[]
 }
 
-model Comment {
+model ChatMessage {
   id          String          @id @default(cuid())
   versionId   String
   version     DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
-  autor       String
-  mensagem    String
-  dataCriacao DateTime        @default(now())
+  role        MessageRole
+  content     String
+  createdAt   DateTime        @default(now())
+}
+
+enum MessageRole {
+  user
+  assistant
 }
 
 enum Status {
