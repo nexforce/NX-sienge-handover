@@ -16,30 +16,32 @@ export async function loadProcessContext(documentId: string): Promise<{
   memoryContent: string
   docContent: string
 }> {
+  const processDir = findProcessDir(documentId)
   const systemPrompt = loadSystemPrompt(documentId)
-  const memoryContent = loadMemory(documentId)
-  const docContent = await extractDocContent(documentId)
+  const memoryContent = loadMemory(processDir)
+  const docContent = await extractDocContent(processDir)
   return { systemPrompt, memoryContent, docContent }
 }
 
 function loadSystemPrompt(documentId: string): string {
-  const promptPath = path.join(AGENTS_ROOT, documentId, 'CLAUDE.md')
+  const promptPath = path.resolve(AGENTS_ROOT, documentId, 'CLAUDE.md')
+  if (!promptPath.startsWith(AGENTS_ROOT + path.sep)) {
+    return `You are the documentation agent for process ${documentId} of Sienge RaaS. Help users revise process documentation. Communicate in Portuguese (Brazil).`
+  }
   if (!fs.existsSync(promptPath)) {
     return `You are the documentation agent for process ${documentId} of Sienge RaaS. Help users revise process documentation. Communicate in Portuguese (Brazil).`
   }
   return fs.readFileSync(promptPath, 'utf-8')
 }
 
-function loadMemory(documentId: string): string {
-  const processDir = findProcessDir(documentId)
+function loadMemory(processDir: string | null): string {
   if (!processDir) return ''
   const memPath = path.join(DOCS_ROOT, processDir, 'MEMORY.md')
   if (!fs.existsSync(memPath)) return ''
   return fs.readFileSync(memPath, 'utf-8')
 }
 
-async function extractDocContent(documentId: string): Promise<string> {
-  const processDir = findProcessDir(documentId)
+async function extractDocContent(processDir: string | null): Promise<string> {
   if (!processDir) return ''
   const genDir = path.join(DOCS_ROOT, processDir, 'documentacao-gerada')
   if (!fs.existsSync(genDir)) return ''
@@ -56,8 +58,8 @@ async function extractDocContent(documentId: string): Promise<string> {
 
 export function buildSystemPrompt(
   systemPrompt: string,
-  docContent: string,
-  memoryContent: string
+  memoryContent: string,
+  docContent: string
 ): string {
   const parts = [systemPrompt]
   if (memoryContent) {
