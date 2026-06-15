@@ -13,12 +13,6 @@ interface DocumentVersion {
   linkDocumento?: string
   status: Status
   dataCriacao: string
-  comments: Array<{
-    id: string
-    autor: string
-    mensagem: string
-    dataCriacao: string
-  }>
 }
 
 interface DocumentDetail {
@@ -59,11 +53,7 @@ export default function DocumentPage({ params }: { params: Promise<{ id: string[
       await fetch('/api/versions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documentId: id,
-          linkDocumento: data.linkDocumento,
-          status: data.status,
-        }),
+        body: JSON.stringify({ documentId: id, linkDocumento: data.linkDocumento, status: data.status }),
       })
       await fetchDocument()
     } catch (error) {
@@ -81,28 +71,6 @@ export default function DocumentPage({ params }: { params: Promise<{ id: string[
       await fetchDocument()
     } catch (error) {
       console.error('Failed to update status:', error)
-    }
-  }
-
-  const handleDeleteComment = async (commentId: string) => {
-    try {
-      await fetch(`/api/comments/${commentId}`, { method: 'DELETE' })
-      await fetchDocument()
-    } catch (error) {
-      console.error('Failed to delete comment:', error)
-    }
-  }
-
-  const handleAddComment = async (versionId: string, mensagem: string) => {
-    try {
-      await fetch('/api/comments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ versionId, mensagem }),
-      })
-      await fetchDocument()
-    } catch (error) {
-      console.error('Failed to add comment:', error)
     }
   }
 
@@ -172,7 +140,7 @@ export default function DocumentPage({ params }: { params: Promise<{ id: string[
               Nenhuma versão cadastrada
             </p>
           ) : (
-            document.versions.map((version) => (
+            document.versions.map(version => (
               <VersionCard
                 key={version.id}
                 id={version.id}
@@ -180,13 +148,7 @@ export default function DocumentPage({ params }: { params: Promise<{ id: string[
                 linkDocumento={version.linkDocumento}
                 status={version.status}
                 dataCriacao={new Date(version.dataCriacao)}
-                comments={version.comments.map((c) => ({
-                  ...c,
-                  dataCriacao: new Date(c.dataCriacao),
-                }))}
-                onStatusChange={(status) => handleStatusChange(version.id, status)}
-                onAddComment={(mensagem) => handleAddComment(version.id, mensagem)}
-                onDeleteComment={handleDeleteComment}
+                onStatusChange={status => handleStatusChange(version.id, status)}
               />
             ))
           )}
