@@ -11,15 +11,33 @@ import {
 
 const anthropic = new Anthropic()
 
-function logUsage(chain: string, processId: string, versionId: string, input: number, output: number) {
-  const inputCost = (input / 1_000_000) * 3
-  const outputCost = (output / 1_000_000) * 15
-  const costUsd = inputCost + outputCost
+function logUsage(
+  chain: string,
+  processId: string,
+  versionId: string,
+  usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }
+) {
+  const cacheCreate = usage.cache_creation_input_tokens ?? 0
+  const cacheRead = usage.cache_read_input_tokens ?? 0
+  const inputCost = (usage.input_tokens / 1_000_000) * 3
+  const outputCost = (usage.output_tokens / 1_000_000) * 15
+  const cacheCreateCost = (cacheCreate / 1_000_000) * 3.75
+  const cacheReadCost = (cacheRead / 1_000_000) * 0.30
+  const costUsd = inputCost + outputCost + cacheCreateCost + cacheReadCost
   console.log(
-    `[${chain}] processo=${processId} | input=${input}tok ($${inputCost.toFixed(5)}) | output=${output}tok ($${outputCost.toFixed(5)}) | total≈$${costUsd.toFixed(5)}`
+    `[${chain}] processo=${processId} | input=${usage.input_tokens} cacheCreate=${cacheCreate} cacheRead=${cacheRead} output=${usage.output_tokens} | total≈$${costUsd.toFixed(5)}`
   )
   prisma.usageLog.create({
-    data: { processId, versionId, chain, inputTokens: input, outputTokens: output, costUsd },
+    data: {
+      processId,
+      versionId,
+      chain,
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      cacheCreationTokens: cacheCreate,
+      cacheReadTokens: cacheRead,
+      costUsd,
+    },
   }).catch((err) => console.error('[UsageLog] Failed to persist:', err))
 }
 
@@ -107,19 +125,21 @@ export async function POST(
   })
 
   const currentIndex = allVersions.findIndex(v => v.id === versionId)
-  const prevVersion = currentIndex > 0 ? allVersions[currentIndex - 1] : null
+  const currentVersion = allVersions[currentIndex] ?? null
 
-  const previousVersionContent = prevVersion?.fileContent
-    ? await extractDocContentFromBuffer(Buffer.from(prevVersion.fileContent))
+  // Show the agent the content of the version currently being reviewed
+  const currentVersionContent = currentVersion?.fileContent
+    ? await extractDocContentFromBuffer(Buffer.from(currentVersion.fileContent))
     : ''
 
+  // Changelog history = all versions created before this one
   const changelogHistory = allVersions
     .slice(0, currentIndex)
     .map(v => v.changeLog)
     .filter((cl): cl is string => !!cl)
 
-  const versionContext = previousVersionContent || changelogHistory.length > 0
-    ? { previousVersionContent, changelogHistory }
+  const versionContext = currentVersionContent || changelogHistory.length > 0
+    ? { currentVersionContent, changelogHistory }
     : undefined
 
   const { systemPrompt, memoryContent, docContent } = await loadProcessContext(
@@ -156,7 +176,7 @@ export async function POST(
           const response = anthropic.messages.stream({
             model: 'claude-sonnet-4-6',
             max_tokens: 4096,
-            system: fullSystem,
+            system: [{ type: 'text', text: fullSystem, cache_control: { type: 'ephemeral' } }],
             messages: loopMessages,
             tools: [READ_FILES_TOOL],
             tool_choice: { type: 'auto' },
@@ -173,7 +193,7 @@ export async function POST(
           }
 
           const finalMsg = await response.finalMessage()
-          logUsage(`chat[${iteration}]`, version.document.id, versionId, finalMsg.usage.input_tokens, finalMsg.usage.output_tokens)
+          logUsage(`chat[${iteration}]`, version.document.id, versionId, finalMsg.usage)
 
           if (finalMsg.stop_reason === 'end_turn' || finalMsg.stop_reason !== 'tool_use') break
 
