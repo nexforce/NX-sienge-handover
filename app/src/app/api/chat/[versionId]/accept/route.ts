@@ -1,59 +1,78 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
-import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/auth'
-import { loadProcessContext, buildSystemPrompt, extractDocContentFromBuffer } from '@/lib/agent-context'
+import { extractParagraphs, applyEdits, DocxEdit } from '@/lib/docx-edit'
 import { Status } from '@prisma/client'
 
 const anthropic = new Anthropic()
 
-function logUsage(chain: string, processId: string, versionId: string, input: number, output: number) {
-  const inputCost = (input / 1_000_000) * 3
-  const outputCost = (output / 1_000_000) * 15
-  const costUsd = inputCost + outputCost
+function logUsage(
+  chain: string,
+  processId: string,
+  versionId: string,
+  usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }
+) {
+  const cacheCreate = usage.cache_creation_input_tokens ?? 0
+  const cacheRead = usage.cache_read_input_tokens ?? 0
+  const inputCost = (usage.input_tokens / 1_000_000) * 3
+  const outputCost = (usage.output_tokens / 1_000_000) * 15
+  const cacheCreateCost = (cacheCreate / 1_000_000) * 3.75
+  const cacheReadCost = (cacheRead / 1_000_000) * 0.30
+  const costUsd = inputCost + outputCost + cacheCreateCost + cacheReadCost
   console.log(
-    `[${chain}] processo=${processId} | input=${input}tok ($${inputCost.toFixed(5)}) | output=${output}tok ($${outputCost.toFixed(5)}) | total≈$${costUsd.toFixed(5)}`
+    `[${chain}] processo=${processId} | input=${usage.input_tokens} cacheCreate=${cacheCreate} cacheRead=${cacheRead} output=${usage.output_tokens} | total≈$${costUsd.toFixed(5)}`
   )
   prisma.usageLog.create({
-    data: { processId, versionId, chain, inputTokens: input, outputTokens: output, costUsd },
+    data: {
+      processId,
+      versionId,
+      chain,
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      cacheCreationTokens: cacheCreate,
+      cacheReadTokens: cacheRead,
+      costUsd,
+    },
   }).catch((err) => console.error('[UsageLog] Failed to persist:', err))
 }
 
-interface PlanChange {
-  section: string
-  description: string
-  rationale: string
-}
-
-interface AcceptedPlan {
-  title: string
-  changes: PlanChange[]
-}
-
-function markdownToDocx(content: string): Document {
-  const paragraphs: Paragraph[] = []
-
-  for (const line of content.split('\n')) {
-    if (line.startsWith('# ')) {
-      paragraphs.push(new Paragraph({ text: line.slice(2).trim(), heading: HeadingLevel.HEADING_1 }))
-    } else if (line.startsWith('## ')) {
-      paragraphs.push(new Paragraph({ text: line.slice(3).trim(), heading: HeadingLevel.HEADING_2 }))
-    } else if (line.startsWith('### ')) {
-      paragraphs.push(new Paragraph({ text: line.slice(4).trim(), heading: HeadingLevel.HEADING_3 }))
-    } else if (line.startsWith('- ')) {
-      paragraphs.push(new Paragraph({
-        children: [new TextRun({ text: line.slice(2).trim() })],
-        bullet: { level: 0 },
-      }))
-    } else if (line.trim()) {
-      paragraphs.push(new Paragraph({ children: [new TextRun(line)] }))
-    } else {
-      paragraphs.push(new Paragraph({ text: '' }))
-    }
-  }
-
-  return new Document({ sections: [{ properties: {}, children: paragraphs }] })
+const PROPOSE_EDITS_TOOL: Anthropic.Tool = {
+  name: 'propose_docx_edits',
+  description:
+    'Propõe uma lista de edições precisas ao documento .docx atual, baseadas na conversa de revisão. Cada edit referencia um parágrafo pelo índice e valida o trecho de texto original antes de substituir.',
+  input_schema: {
+    type: 'object' as const,
+    required: ['summary', 'edits'],
+    properties: {
+      summary: {
+        type: 'string',
+        description: 'Resumo em 1-2 frases das mudanças realizadas. Será salvo como changeLog da nova versão.',
+      },
+      edits: {
+        type: 'array',
+        description: 'Lista de edições a aplicar ao documento. Cada item altera exatamente um parágrafo.',
+        items: {
+          type: 'object',
+          required: ['paragraph_index', 'old_text_snippet', 'new_text'],
+          properties: {
+            paragraph_index: {
+              type: 'integer',
+              description: 'Índice do parágrafo a editar (começa em 0, mesmo índice da lista fornecida).',
+            },
+            old_text_snippet: {
+              type: 'string',
+              description: 'Trecho do texto atual do parágrafo para validar que o índice está correto. Pode ser substring.',
+            },
+            new_text: {
+              type: 'string',
+              description: 'Novo conteúdo completo do parágrafo (substitui o parágrafo inteiro).',
+            },
+          },
+        },
+      },
+    },
+  },
 }
 
 export async function POST(
@@ -67,25 +86,12 @@ export async function POST(
 
   const { versionId } = await params
 
-  let plan: AcceptedPlan
-  try {
-    plan = await req.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
-  }
-
-  if (!plan?.title || !Array.isArray(plan.changes)) {
-    return NextResponse.json({ error: 'Invalid plan format' }, { status: 400 })
-  }
-
-  if (plan.changes.length === 0) {
-    return NextResponse.json({ error: 'O plano não contém mudanças.' }, { status: 400 })
-  }
-
+  // Load the current version with chat history
   const version = await prisma.documentVersion.findUnique({
     where: { id: versionId },
     include: {
       document: true,
+      chatMessages: { orderBy: { createdAt: 'asc' }, select: { role: true, content: true } },
     },
   })
 
@@ -93,69 +99,108 @@ export async function POST(
     return NextResponse.json({ error: 'Version not found' }, { status: 404 })
   }
 
-  // Build version context
-  const allVersions = await prisma.documentVersion.findMany({
-    where: { documentId: version.documentId },
-    orderBy: { dataCriacao: 'asc' },
-    select: { id: true, fileContent: true, changeLog: true },
-  })
-  const currentIndex = allVersions.findIndex(v => v.id === versionId)
-  const prevVersion = currentIndex > 0 ? allVersions[currentIndex - 1] : null
-  const previousVersionContent = prevVersion?.fileContent
-    ? await extractDocContentFromBuffer(Buffer.from(prevVersion.fileContent))
-    : ''
-  const changelogHistory = allVersions
-    .slice(0, currentIndex)
-    .map(v => v.changeLog)
-    .filter((cl): cl is string => !!cl)
-  const versionContext = previousVersionContent || changelogHistory.length > 0
-    ? { previousVersionContent, changelogHistory }
-    : undefined
+  if (version.chatMessages.length === 0) {
+    return NextResponse.json({ error: 'Nenhuma conversa encontrada. Discuta as mudanças antes de aceitar.' }, { status: 400 })
+  }
 
-  const { systemPrompt, memoryContent, docContent } = await loadProcessContext(version.document.id, versionContext)
-  const fullSystem = buildSystemPrompt(systemPrompt, memoryContent, docContent, changelogHistory)
+  // Need the current version's file to edit in-place
+  if (!version.fileContent) {
+    return NextResponse.json(
+      { error: 'Esta versão não tem arquivo base. Gere o V1 via gerar_documento.py + seed antes de revisar pelo chat.' },
+      { status: 400 }
+    )
+  }
 
-  const planText = plan.changes
-    .map((c, i) => `${i + 1}. Seção: ${c.section}\n   Mudança: ${c.description}\n   Motivo: ${c.rationale}`)
+  const baseBuffer = Buffer.from(version.fileContent)
+
+  // Extract paragraphs from the base file
+  let paragraphs: { index: number; text: string }[]
+  try {
+    paragraphs = await extractParagraphs(baseBuffer)
+  } catch (err) {
+    console.error('[accept] extractParagraphs error:', err)
+    return NextResponse.json({ error: 'Falha ao extrair parágrafos do documento.' }, { status: 500 })
+  }
+
+  // Build the paragraph list for the prompt
+  const paragraphList = paragraphs
+    .map(p => `[${p.index}] ${p.text}`)
+    .join('\n')
+
+  // Build chat history for context
+  const chatHistory = version.chatMessages
+    .map(m => `${m.role === 'user' ? 'Revisor' : 'Agente'}: ${m.content}`)
     .join('\n\n')
 
+  // Single call with forced propose_docx_edits tool
   let response: Anthropic.Message
   try {
     response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      system: fullSystem,
+      max_tokens: 2048,
+      system: [
+        {
+          type: 'text',
+          text: `Você é um assistente especializado em aplicar mudanças de documentação. Você receberá:
+1. O histórico de uma conversa de revisão entre o revisor e o agente.
+2. A lista de parágrafos numerados do documento atual (formato: [índice] texto).
+
+Sua tarefa: propor exatamente quais parágrafos devem mudar, com o novo texto, baseado nas mudanças discutidas na conversa. Use a ferramenta propose_docx_edits.
+
+Regras críticas:
+- Edite apenas o que foi explicitamente discutido na conversa.
+- old_text_snippet DEVE ser uma substring literal do texto atual do parágrafo — copie diretamente da lista. NUNCA invente ou parafrasie o snippet.
+- PREFIRA sempre parágrafos com conteúdo (texto não vazio). Parágrafos vazios são separadores de espaçamento e têm estilos imprevisíveis — evite usá-los como alvo. Use um parágrafo vazio somente se não houver alternativa, e nesse caso use old_text_snippet: "".
+- Para ADICIONAR conteúdo a uma seção: edite o último parágrafo não-vazio da seção para expandir seu conteúdo, ou atualize o parágrafo de título da seção com o texto novo logo abaixo. Nunca ponha conteúdo novo num parágrafo vazio de separação.
+- Seja conservador: inclua apenas mudanças com suporte claro na conversa.`,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [
         {
           role: 'user',
-          content: `Plano de mudanças aprovado:\n\n${planText}\n\nGere agora o documento completo e atualizado incorporando todas essas mudanças. Siga exatamente o formato de saída definido (Chain 3). Sem preâmbulo.`,
+          content: `## Conversa de revisão\n\n${chatHistory}\n\n## Parágrafos do documento (índice → texto)\n\n${paragraphList}\n\nPropõe as edições necessárias.`,
         },
       ],
+      tools: [PROPOSE_EDITS_TOOL],
+      tool_choice: { type: 'tool', name: 'propose_docx_edits' },
     })
   } catch (err) {
     console.error('[accept] Anthropic API error:', err)
-    return NextResponse.json({ error: 'Falha ao gerar documento. Tente novamente.' }, { status: 500 })
+    return NextResponse.json({ error: 'Falha ao gerar edições. Tente novamente.' }, { status: 500 })
   }
 
-  logUsage('accept', version.document.id, versionId, response.usage.input_tokens, response.usage.output_tokens)
+  logUsage('accept', version.document.id, versionId, response.usage)
 
-  const textContent = response.content.find(b => b.type === 'text')
-  if (!textContent || textContent.type !== 'text' || !textContent.text.trim()) {
-    return NextResponse.json({ error: 'Falha ao gerar documento.' }, { status: 500 })
+  // Extract the tool call result
+  const toolUse = response.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'propose_docx_edits'
+  )
+
+  if (!toolUse) {
+    console.error('[accept] No propose_docx_edits tool call in response')
+    return NextResponse.json({ error: 'Agente não propôs edições.' }, { status: 500 })
   }
 
-  // Convert markdown to .docx buffer
-  const doc = markdownToDocx(textContent.text)
-  let fileBytes: Uint8Array<ArrayBuffer>
+  const { summary, edits } = toolUse.input as { summary: string; edits: DocxEdit[] }
+
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return NextResponse.json({ error: 'Nenhuma edição proposta. Discuta mudanças concretas antes de aceitar.' }, { status: 400 })
+  }
+
+  // Apply edits to the base document
+  let newDocBuffer: Buffer
   try {
-    const rawBuffer = await Packer.toBuffer(doc)
-    fileBytes = new Uint8Array(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength) as Uint8Array<ArrayBuffer>
+    newDocBuffer = await applyEdits(baseBuffer, edits)
   } catch (err) {
-    console.error('[accept] docx generation error:', err)
-    return NextResponse.json({ error: 'Falha ao gerar arquivo .docx.' }, { status: 500 })
+    console.error('[accept] applyEdits error:', err)
+    return NextResponse.json(
+      { error: `Falha ao aplicar edições: ${(err as Error).message}` },
+      { status: 500 }
+    )
   }
 
-  // Get next version number
+  // Determine next version number
   const lastVersion = await prisma.documentVersion.findFirst({
     where: { documentId: version.documentId },
     orderBy: { dataCriacao: 'desc' },
@@ -163,24 +208,27 @@ export async function POST(
   const parsed = lastVersion ? parseInt(lastVersion.numeroVersao.replace('V', ''), 10) : NaN
   const nextNum = Number.isFinite(parsed) ? parsed + 1 : 1
 
-  const changeLogText = `${plan.title}: ${plan.changes.map(c => `${c.section} — ${c.description}`).join('; ')}`
-
-  // Create new DocumentVersion with file binary and changelog in DB
+  // Create new DocumentVersion with the edited binary
   const newVersion = await prisma.documentVersion.create({
     data: {
       documentId: version.documentId,
       numeroVersao: `V${nextNum}`,
-      linkDocumento: null,
-      fileContent: fileBytes,
-      changeLog: changeLogText,
+      fileContent: new Uint8Array(newDocBuffer.buffer, newDocBuffer.byteOffset, newDocBuffer.byteLength) as Uint8Array<ArrayBuffer>,
+      changeLog: summary,
       status: Status.Pendente,
     },
   })
 
-  // Update linkDocumento to point to generated file route
+  // Update linkDocumento to point to the file API route
   const updated = await prisma.documentVersion.update({
     where: { id: newVersion.id },
     data: { linkDocumento: `/api/files/generated/${newVersion.id}` },
+  })
+
+  // Sync Document.statusAtual to the new version's status
+  await prisma.document.update({
+    where: { id: version.documentId },
+    data: { statusAtual: Status.Pendente },
   })
 
   return NextResponse.json({ versionId: updated.id, numeroVersao: updated.numeroVersao })

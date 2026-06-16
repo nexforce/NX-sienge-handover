@@ -44,7 +44,7 @@ export default function DocumentPage({ params }: { params: Promise<{ id: string[
       const data: DocumentDetail = await response.json()
       setDocument(data)
       // Auto-select the latest version if none is selected yet
-      setSelectedVersionId(prev => prev ?? data.versions.at(-1)?.id ?? null)
+      setSelectedVersionId(prev => prev ?? data.versions[0]?.id ?? null)
     } catch (error) {
       console.error('Failed to fetch document:', error)
     } finally {

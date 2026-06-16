@@ -15,7 +15,7 @@ export function findProcessDir(documentId: string): string | null {
 }
 
 export interface VersionContext {
-  previousVersionContent: string
+  currentVersionContent: string
   changelogHistory: string[]
 }
 
@@ -26,8 +26,8 @@ export async function loadProcessContext(
   const processDir = findProcessDir(documentId)
   const systemPrompt = loadSystemPrompt(documentId)
   const memoryContent = loadMemory(processDir)
-  // Use previous version content when available; fall back to file on disk for V1
-  const docContent = versionContext?.previousVersionContent
+  // Use current version's extracted content when available; fall back to disk for V1
+  const docContent = versionContext?.currentVersionContent
     ?? await extractDocContentFromDisk(processDir)
   return { systemPrompt, memoryContent, docContent }
 }
@@ -87,10 +87,7 @@ export function buildSystemPrompt(
   }
 
   if (docContent) {
-    const docLabel = changelogHistory && changelogHistory.length > 0
-      ? '## Versão anterior do documento (base para suas revisões)'
-      : '## Current Document Content'
-    parts.push(`\n\n---\n${docLabel}\n\n${docContent}`)
+    parts.push(`\n\n---\n## Conteúdo atual do documento (versão em revisão)\n\n${docContent}`)
   } else {
     parts.push(`\n\n---\n## Current Document Content\n\nNo document exists yet for this process. If the user wants to create documentation from scratch, help them define the content.`)
   }
