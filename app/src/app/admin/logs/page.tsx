@@ -14,12 +14,21 @@ interface UsageLog {
   inputTokens: number
   outputTokens: number
   costUsd: number
+  userEmail: string | null
   createdAt: string
 }
 
 interface Aggregate {
   processId: string
   processName: string
+  count: number
+  inputTokens: number
+  outputTokens: number
+  costUsd: number
+}
+
+interface UserAggregate {
+  userEmail: string
   count: number
   inputTokens: number
   outputTokens: number
@@ -34,6 +43,18 @@ interface Document {
 interface DocumentVersion {
   id: string
   numeroVersao: string
+}
+
+interface ChatMessage {
+  id: string
+  content: string
+  userEmail: string | null
+  createdAt: string
+  version: {
+    id: string
+    numeroVersao: string
+    document: { id: string; nome: string }
+  }
 }
 
 function formatCost(costUsd: number): string {
@@ -51,6 +72,11 @@ function formatDate(iso: string): string {
   })
 }
 
+function shortEmail(email: string | null): string {
+  if (!email) return '—'
+  return email.replace('@nexforce.ai', '')
+}
+
 export default function AdminLogsPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
@@ -59,12 +85,17 @@ export default function AdminLogsPage() {
   const [versions, setVersions] = useState<DocumentVersion[]>([])
   const [logs, setLogs] = useState<UsageLog[]>([])
   const [aggregates, setAggregates] = useState<Aggregate[]>([])
+  const [userAggregates, setUserAggregates] = useState<UserAggregate[]>([])
+  const [allUsers, setAllUsers] = useState<string[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(false)
+  const [messagesLoading, setMessagesLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [processFilter, setProcessFilter] = useState('')
   const [versionFilter, setVersionFilter] = useState('')
   const [chainFilter, setChainFilter] = useState('')
+  const [userFilter, setUserFilter] = useState('')
 
   useEffect(() => {
     if (status === 'loading') return
@@ -96,6 +127,7 @@ export default function AdminLogsPage() {
     if (processFilter) params.set('processId', processFilter)
     if (versionFilter) params.set('versionId', versionFilter)
     if (chainFilter) params.set('chain', chainFilter)
+    if (userFilter) params.set('userEmail', userFilter)
 
     setLoading(true)
     setError(null)
@@ -104,17 +136,38 @@ export default function AdminLogsPage() {
         if (!r.ok) throw new Error('fetch failed')
         return r.json()
       })
-      .then((data: { logs: UsageLog[]; aggregates: Aggregate[] }) => {
+      .then((data: { logs: UsageLog[]; aggregates: Aggregate[]; userAggregates: UserAggregate[]; users: string[] }) => {
         setLogs(data.logs)
         setAggregates(data.aggregates)
+        setUserAggregates(data.userAggregates ?? [])
+        setAllUsers(data.users ?? [])
       })
       .catch(() => setError('Erro ao carregar logs.'))
       .finally(() => setLoading(false))
-  }, [session, processFilter, versionFilter, chainFilter])
+  }, [session, processFilter, versionFilter, chainFilter, userFilter])
+
+  const fetchMessages = useCallback(() => {
+    if (session?.user?.email !== ADMIN_EMAIL) return
+    const params = new URLSearchParams()
+    if (processFilter) params.set('processId', processFilter)
+    if (versionFilter) params.set('versionId', versionFilter)
+    if (userFilter) params.set('userEmail', userFilter)
+
+    setMessagesLoading(true)
+    fetch(`/api/admin/messages?${params.toString()}`)
+      .then((r) => r.json())
+      .then((data: ChatMessage[]) => setMessages(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setMessagesLoading(false))
+  }, [session, processFilter, versionFilter, userFilter])
 
   useEffect(() => {
     fetchLogs()
   }, [fetchLogs])
+
+  useEffect(() => {
+    fetchMessages()
+  }, [fetchMessages])
 
   if (status === 'loading' || !session || session.user?.email !== ADMIN_EMAIL) {
     return null
@@ -127,7 +180,7 @@ export default function AdminLogsPage() {
         {/* Header */}
         <div className="border-b border-[#215A9F] pb-4">
           <h1 className="text-2xl font-bold text-[#0C0E0E]">Logs de Uso — Agentes</h1>
-          <p className="text-sm text-[#515151] mt-1">Monitoramento de tokens e custo por processo</p>
+          <p className="text-sm text-[#515151] mt-1">Monitoramento de acessos, tokens e custo por processo e usuário</p>
         </div>
 
         {/* Filters */}
@@ -174,13 +227,58 @@ export default function AdminLogsPage() {
               <option value="accept">accept</option>
             </select>
           </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-[#515151] uppercase tracking-wide">Usuário</label>
+            <select
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+              className="border border-gray-200 rounded px-3 py-1.5 text-sm text-[#0C0E0E] min-w-[180px] focus:outline-none focus:ring-2 focus:ring-[#215A9F]"
+            >
+              <option value="">Todos os usuários</option>
+              {allUsers.map((u) => (
+                <option key={u} value={u}>{shortEmail(u)}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {error && (
           <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded px-4 py-2">{error}</p>
         )}
 
-        {/* Aggregates */}
+        {/* User aggregates */}
+        {userAggregates.length > 0 && (
+          <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100">
+              <h2 className="text-sm font-semibold text-[#0C0E0E]">Uso por Usuário</h2>
+            </div>
+            <table className="w-full text-sm">
+              <thead className="bg-[#F5F5F5]">
+                <tr>
+                  <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Usuário</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Interações</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Tokens Input</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Tokens Output</th>
+                  <th className="text-right px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Custo (USD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {userAggregates.map((u) => (
+                  <tr key={u.userEmail} className="border-t border-gray-50 hover:bg-gray-50">
+                    <td className="px-4 py-2 text-[#0C0E0E] font-medium">{shortEmail(u.userEmail)}</td>
+                    <td className="px-4 py-2 text-right text-[#515151]">{u.count}</td>
+                    <td className="px-4 py-2 text-right text-[#515151]">{u.inputTokens.toLocaleString()}</td>
+                    <td className="px-4 py-2 text-right text-[#515151]">{u.outputTokens.toLocaleString()}</td>
+                    <td className="px-4 py-2 text-right font-medium text-[#215A9F]">{formatCost(u.costUsd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Process aggregates */}
         {aggregates.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
@@ -211,7 +309,7 @@ export default function AdminLogsPage() {
           </div>
         )}
 
-        {/* Logs table */}
+        {/* Individual logs */}
         <div className="bg-white rounded-lg shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-[#0C0E0E]">Logs Individuais</h2>
@@ -226,6 +324,7 @@ export default function AdminLogsPage() {
                 <thead className="bg-[#F5F5F5]">
                   <tr>
                     <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide whitespace-nowrap">Data/Hora</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Usuário</th>
                     <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Processo</th>
                     <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Versão</th>
                     <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Chain</th>
@@ -238,6 +337,7 @@ export default function AdminLogsPage() {
                   {logs.map((log) => (
                     <tr key={log.id} className="border-t border-gray-50 hover:bg-gray-50">
                       <td className="px-4 py-2 text-[#515151] whitespace-nowrap">{formatDate(log.createdAt)}</td>
+                      <td className="px-4 py-2 text-[#0C0E0E] whitespace-nowrap">{shortEmail(log.userEmail)}</td>
                       <td className="px-4 py-2 text-[#0C0E0E]">{log.processId}</td>
                       <td className="px-4 py-2 text-[#515151] font-mono text-xs">{log.versionId.slice(0, 8)}…</td>
                       <td className="px-4 py-2">
@@ -248,6 +348,45 @@ export default function AdminLogsPage() {
                       <td className="px-4 py-2 text-right text-[#515151]">{log.inputTokens.toLocaleString()}</td>
                       <td className="px-4 py-2 text-right text-[#515151]">{log.outputTokens.toLocaleString()}</td>
                       <td className="px-4 py-2 text-right font-medium text-[#215A9F]">{formatCost(log.costUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Recent questions */}
+        <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-[#0C0E0E]">Perguntas Recentes</h2>
+            {messagesLoading && <span className="text-xs text-[#515151]">Carregando...</span>}
+          </div>
+
+          {!messagesLoading && messages.length === 0 ? (
+            <p className="text-center text-[#515151] py-10 text-sm">Nenhuma pergunta registrada ainda.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-[#F5F5F5]">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide whitespace-nowrap">Data/Hora</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Usuário</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Processo</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Versão</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-[#515151] uppercase tracking-wide">Pergunta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {messages.map((msg) => (
+                    <tr key={msg.id} className="border-t border-gray-50 hover:bg-gray-50">
+                      <td className="px-4 py-2 text-[#515151] whitespace-nowrap">{formatDate(msg.createdAt)}</td>
+                      <td className="px-4 py-2 text-[#0C0E0E] whitespace-nowrap">{shortEmail(msg.userEmail)}</td>
+                      <td className="px-4 py-2 text-[#0C0E0E]">{msg.version.document.nome}</td>
+                      <td className="px-4 py-2 text-[#515151]">{msg.version.numeroVersao}</td>
+                      <td className="px-4 py-2 text-[#515151] max-w-sm truncate" title={msg.content}>
+                        {msg.content}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
