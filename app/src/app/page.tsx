@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
+import { useSession } from "next-auth/react";
 import { Status } from "@prisma/client";
 import { MetricsBar } from "@/components/MetricsBar";
 import { DocumentCard } from "@/components/DocumentCard";
@@ -15,6 +17,7 @@ interface Document {
 }
 
 export default function Home() {
+  const { data: session } = useSession();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -54,7 +57,15 @@ export default function Home() {
                 Sienge — HubSpot RaaS
               </p>
             </div>
-            <div className="ml-4">
+            <div className="flex items-center gap-6 ml-4">
+              {session?.user?.email === "hugo.zanni@nexforce.ai" && (
+                <Link
+                  href="/admin/logs"
+                  className="text-sm font-semibold text-[#215A9F] hover:text-[#0C0E0E] transition-colors"
+                >
+                  Logs de Uso
+                </Link>
+              )}
               <img
                 src="https://github.com/wteodosionx/nx-logo/raw/0ba05bc3bccba383d907e22aadd647514d03114d/NF%20-%20PRETO-01.png"
                 alt="Nexforce"

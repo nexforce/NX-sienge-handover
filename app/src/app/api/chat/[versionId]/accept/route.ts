@@ -3,10 +3,22 @@ import Anthropic from '@anthropic-ai/sdk'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/auth'
-import { loadProcessContext, buildSystemPrompt } from '@/lib/agent-context'
+import { loadProcessContext, buildSystemPrompt, extractDocContentFromBuffer } from '@/lib/agent-context'
 import { Status } from '@prisma/client'
 
 const anthropic = new Anthropic()
+
+function logUsage(chain: string, processId: string, versionId: string, input: number, output: number) {
+  const inputCost = (input / 1_000_000) * 3
+  const outputCost = (output / 1_000_000) * 15
+  const costUsd = inputCost + outputCost
+  console.log(
+    `[${chain}] processo=${processId} | input=${input}tok ($${inputCost.toFixed(5)}) | output=${output}tok ($${outputCost.toFixed(5)}) | total≈$${costUsd.toFixed(5)}`
+  )
+  prisma.usageLog.create({
+    data: { processId, versionId, chain, inputTokens: input, outputTokens: output, costUsd },
+  }).catch((err) => console.error('[UsageLog] Failed to persist:', err))
+}
 
 interface PlanChange {
   section: string
@@ -81,8 +93,27 @@ export async function POST(
     return NextResponse.json({ error: 'Version not found' }, { status: 404 })
   }
 
-  const { systemPrompt, memoryContent, docContent } = await loadProcessContext(version.document.id)
-  const fullSystem = buildSystemPrompt(systemPrompt, memoryContent, docContent)
+  // Build version context
+  const allVersions = await prisma.documentVersion.findMany({
+    where: { documentId: version.documentId },
+    orderBy: { dataCriacao: 'asc' },
+    select: { id: true, fileContent: true, changeLog: true },
+  })
+  const currentIndex = allVersions.findIndex(v => v.id === versionId)
+  const prevVersion = currentIndex > 0 ? allVersions[currentIndex - 1] : null
+  const previousVersionContent = prevVersion?.fileContent
+    ? await extractDocContentFromBuffer(Buffer.from(prevVersion.fileContent))
+    : ''
+  const changelogHistory = allVersions
+    .slice(0, currentIndex)
+    .map(v => v.changeLog)
+    .filter((cl): cl is string => !!cl)
+  const versionContext = previousVersionContent || changelogHistory.length > 0
+    ? { previousVersionContent, changelogHistory }
+    : undefined
+
+  const { systemPrompt, memoryContent, docContent } = await loadProcessContext(version.document.id, versionContext)
+  const fullSystem = buildSystemPrompt(systemPrompt, memoryContent, docContent, changelogHistory)
 
   const planText = plan.changes
     .map((c, i) => `${i + 1}. Seção: ${c.section}\n   Mudança: ${c.description}\n   Motivo: ${c.rationale}`)
@@ -105,6 +136,8 @@ export async function POST(
     console.error('[accept] Anthropic API error:', err)
     return NextResponse.json({ error: 'Falha ao gerar documento. Tente novamente.' }, { status: 500 })
   }
+
+  logUsage('accept', version.document.id, versionId, response.usage.input_tokens, response.usage.output_tokens)
 
   const textContent = response.content.find(b => b.type === 'text')
   if (!textContent || textContent.type !== 'text' || !textContent.text.trim()) {
@@ -130,13 +163,16 @@ export async function POST(
   const parsed = lastVersion ? parseInt(lastVersion.numeroVersao.replace('V', ''), 10) : NaN
   const nextNum = Number.isFinite(parsed) ? parsed + 1 : 1
 
-  // Create new DocumentVersion with file binary in DB
+  const changeLogText = `${plan.title}: ${plan.changes.map(c => `${c.section} — ${c.description}`).join('; ')}`
+
+  // Create new DocumentVersion with file binary and changelog in DB
   const newVersion = await prisma.documentVersion.create({
     data: {
       documentId: version.documentId,
       numeroVersao: `V${nextNum}`,
       linkDocumento: null,
       fileContent: fileBytes,
+      changeLog: changeLogText,
       status: Status.Pendente,
     },
   })

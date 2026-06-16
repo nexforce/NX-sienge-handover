@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client'
+import { syncVersions } from '../scripts/sync-versions'
 
 const prisma = new PrismaClient()
 
@@ -21,8 +22,7 @@ const documents = [
 ]
 
 async function main() {
-  console.log('Seeding database...')
-
+  console.log('Seeding documents...')
   for (const doc of documents) {
     await prisma.document.upsert({
       where: { id: doc.id },
@@ -34,6 +34,9 @@ async function main() {
       },
     })
   }
+
+  console.log('Syncing versions from disk (docs/processos/*/documentacao-gerada)...')
+  await syncVersions()
 
   console.log('Seeding completed!')
   process.exit(0)

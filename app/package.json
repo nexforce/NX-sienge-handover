@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "prisma:push": "prisma db push",
-    "prisma:seed": "node --loader ts-node/esm prisma/seed.ts",
+    "prisma:seed": "npx tsx prisma/seed.ts",
     "prisma:generate": "prisma generate",
     "sync-versions": "npx tsx scripts/sync-versions.ts"
   },

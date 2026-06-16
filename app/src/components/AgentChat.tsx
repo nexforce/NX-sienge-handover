@@ -34,10 +34,21 @@ export function AgentChat({ versionId }: AgentChatProps) {
   const [acceptLoading, setAcceptLoading] = useState(false)
   const [acceptedVersion, setAcceptedVersion] = useState<{ versionId: string; numeroVersao: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [toolStatus, setToolStatus] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
+  // Reset all state and fetch history when version changes
   useEffect(() => {
+    setPlan(null)
+    setError(null)
+    setAcceptedVersion(null)
+    setStreaming(false)
+    setStreamingText('')
+    setToolStatus(null)
+    setInput('')
+    setMessages([])
     fetchHistory()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionId])
 
   useEffect(() => {
@@ -64,7 +75,6 @@ export function AgentChat({ versionId }: AgentChatProps) {
     setStreaming(true)
     setStreamingText('')
 
-    // Optimistic user message
     const tmpId = `tmp-${Date.now()}`
     setMessages(prev => [...prev, { id: tmpId, role: 'user', content: text, createdAt: new Date().toISOString() }])
 
@@ -87,7 +97,6 @@ export function AgentChat({ versionId }: AgentChatProps) {
         if (done) break
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
-        // Keep the last (potentially incomplete) line in the buffer
         buffer = lines.pop() ?? ''
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
@@ -96,12 +105,15 @@ export function AgentChat({ versionId }: AgentChatProps) {
           try {
             const parsed = JSON.parse(data)
             if (parsed.error) throw new Error(parsed.error)
+            if (parsed.status) {
+              setToolStatus(parsed.status)
+            }
             if (parsed.text) {
+              setToolStatus(null)
               accumulated += parsed.text
               setStreamingText(accumulated)
             }
           } catch (parseErr) {
-            // Only rethrow intentional server errors, skip JSON parse failures
             if ((parseErr as Error).message && !(parseErr instanceof SyntaxError)) {
               throw parseErr
             }
@@ -110,9 +122,11 @@ export function AgentChat({ versionId }: AgentChatProps) {
       }
 
       setStreamingText('')
+      setToolStatus(null)
       await fetchHistory()
     } catch (err) {
       setError((err as Error).message || 'Erro ao contatar o agente. Tente novamente.')
+      setToolStatus(null)
       setMessages(prev => prev.filter(m => m.id !== tmpId))
     } finally {
       setStreaming(false)
@@ -165,13 +179,9 @@ export function AgentChat({ versionId }: AgentChatProps) {
   const hasMessages = messages.length > 0
 
   return (
-    <div className="mt-6 flex flex-col gap-4">
-      <h3 className="text-lg font-bold text-[#0C0E0E]" style={{ fontFamily: "'Lato', sans-serif" }}>
-        Agente de Revisão
-      </h3>
-
-      {/* Message history */}
-      <div className="flex flex-col gap-3 max-h-96 overflow-y-auto pr-1">
+    <div className="flex flex-col h-full p-4 gap-3">
+      {/* Message history — grows to fill available space, scrolls internally */}
+      <div className="flex flex-col gap-3 flex-1 overflow-y-auto pr-1 min-h-0">
         {!hasMessages && !streaming && (
           <p className="text-sm text-[#777777] italic" style={{ fontFamily: "'Lato', sans-serif" }}>
             Inicie a conversa com o agente para discutir revisões neste documento.
@@ -192,7 +202,13 @@ export function AgentChat({ versionId }: AgentChatProps) {
           </div>
         ))}
 
-        {/* Streaming assistant bubble */}
+        {toolStatus && (
+          <div className="self-start flex items-center gap-2 text-xs text-[#777777] italic px-2" style={{ fontFamily: "'Lato', sans-serif" }}>
+            <span className="inline-block w-3 h-3 border-2 border-[#215A9F] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+            {toolStatus}
+          </div>
+        )}
+
         {streamingText && (
           <div
             className="rounded-lg px-4 py-3 text-sm whitespace-pre-wrap bg-[#F5F5F5] text-[#0C0E0E] border border-[#9C9B9B] self-start max-w-[90%]"
@@ -206,95 +222,94 @@ export function AgentChat({ versionId }: AgentChatProps) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Error message */}
-      {error && (
-        <p className="text-sm text-[#BA1925]" style={{ fontFamily: "'Lato', sans-serif" }}>
-          {error}
-        </p>
-      )}
-
-      {/* Plan card */}
-      {plan && (
-        <div className="border border-[#215A9F] rounded-lg p-4 bg-blue-50">
-          <p className="font-bold text-[#0C0E0E] mb-2" style={{ fontFamily: "'Lato', sans-serif" }}>
-            Plano: {plan.title}
+      {/* Fixed bottom area: error, plan card, success, input */}
+      <div className="flex-shrink-0 flex flex-col gap-3">
+        {error && (
+          <p className="text-sm text-[#BA1925]" style={{ fontFamily: "'Lato', sans-serif" }}>
+            {error}
           </p>
-          <ul className="space-y-2 mb-4">
-            {plan.changes.map((c, i) => (
-              <li key={i} className="text-sm text-[#515151]" style={{ fontFamily: "'Lato', sans-serif" }}>
-                <span className="font-semibold text-[#0C0E0E]">{c.section}:</span> {c.description}
-                <br />
-                <span className="text-xs text-[#777777]">{c.rationale}</span>
-              </li>
-            ))}
-          </ul>
+        )}
+
+        {plan && (
+          <div className="border border-[#215A9F] rounded-lg p-4 bg-blue-50">
+            <p className="font-bold text-[#0C0E0E] mb-2" style={{ fontFamily: "'Lato', sans-serif" }}>
+              Plano: {plan.title}
+            </p>
+            <ul className="space-y-2 mb-4">
+              {plan.changes.map((c, i) => (
+                <li key={i} className="text-sm text-[#515151]" style={{ fontFamily: "'Lato', sans-serif" }}>
+                  <span className="font-semibold text-[#0C0E0E]">{c.section}:</span> {c.description}
+                  <br />
+                  <span className="text-xs text-[#777777]">{c.rationale}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <button
+                onClick={handleAccept}
+                disabled={acceptLoading}
+                className="px-4 py-2 bg-[#215A9F] text-white rounded-md text-sm font-medium hover:bg-[#1a466b] disabled:opacity-50"
+                style={{ fontFamily: "'Lato', sans-serif" }}
+              >
+                {acceptLoading ? 'Gerando nova versão...' : 'Aceitar e Gerar Nova Versão'}
+              </button>
+              <button
+                onClick={() => setPlan(null)}
+                disabled={acceptLoading}
+                className="px-4 py-2 border border-[#9C9B9B] text-[#515151] rounded-md text-sm hover:bg-[#F5F5F5] disabled:opacity-50"
+                style={{ fontFamily: "'Lato', sans-serif" }}
+              >
+                Continuar refinando
+              </button>
+            </div>
+          </div>
+        )}
+
+        {acceptedVersion && (
+          <div className="border border-green-400 rounded-lg p-3 bg-green-50 text-sm text-green-800" style={{ fontFamily: "'Lato', sans-serif" }}>
+            Nova versão <strong>{acceptedVersion.numeroVersao}</strong> criada. Recarregue a página para visualizá-la.
+          </div>
+        )}
+
+        <form onSubmit={handleSend} className="flex flex-col gap-2">
+          <textarea
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                void handleSend()
+              }
+            }}
+            placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)"
+            rows={3}
+            disabled={streaming}
+            className="w-full px-3 py-2 border border-[#9C9B9B] rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#215A9F] text-[#515151] disabled:opacity-50"
+            style={{ fontFamily: "'Lato', sans-serif" }}
+          />
           <div className="flex gap-2">
             <button
-              onClick={handleAccept}
-              disabled={acceptLoading}
-              className="px-4 py-2 bg-[#215A9F] text-white rounded-md text-sm font-medium hover:bg-[#1a466b] disabled:opacity-50"
+              type="submit"
+              disabled={streaming || !input.trim()}
+              className="flex-1 px-4 py-2 bg-[#215A9F] text-white rounded-md text-sm font-medium hover:bg-[#1a466b] disabled:opacity-50"
               style={{ fontFamily: "'Lato', sans-serif" }}
             >
-              {acceptLoading ? 'Gerando nova versão...' : 'Aceitar e Gerar Nova Versão'}
+              {streaming ? 'Aguardando agente...' : 'Enviar'}
             </button>
-            <button
-              onClick={() => setPlan(null)}
-              disabled={acceptLoading}
-              className="px-4 py-2 border border-[#9C9B9B] text-[#515151] rounded-md text-sm hover:bg-[#F5F5F5] disabled:opacity-50"
-              style={{ fontFamily: "'Lato', sans-serif" }}
-            >
-              Continuar refinando
-            </button>
+            {hasMessages && !streaming && !plan && (
+              <button
+                type="button"
+                onClick={handleGeneratePlan}
+                disabled={planLoading}
+                className="px-4 py-2 border border-[#215A9F] text-[#215A9F] rounded-md text-sm font-medium hover:bg-blue-50 disabled:opacity-50"
+                style={{ fontFamily: "'Lato', sans-serif" }}
+              >
+                {planLoading ? 'Gerando...' : 'Gerar Plano'}
+              </button>
+            )}
           </div>
-        </div>
-      )}
-
-      {/* Success message */}
-      {acceptedVersion && (
-        <div className="border border-green-400 rounded-lg p-3 bg-green-50 text-sm text-green-800" style={{ fontFamily: "'Lato', sans-serif" }}>
-          Nova versão <strong>{acceptedVersion.numeroVersao}</strong> criada. Recarregue a página para visualizá-la.
-        </div>
-      )}
-
-      {/* Input form */}
-      <form onSubmit={handleSend} className="flex flex-col gap-2">
-        <textarea
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              void handleSend()
-            }
-          }}
-          placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)"
-          rows={3}
-          disabled={streaming}
-          className="w-full px-3 py-2 border border-[#9C9B9B] rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#215A9F] text-[#515151] disabled:opacity-50"
-          style={{ fontFamily: "'Lato', sans-serif" }}
-        />
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            disabled={streaming || !input.trim()}
-            className="flex-1 px-4 py-2 bg-[#215A9F] text-white rounded-md text-sm font-medium hover:bg-[#1a466b] disabled:opacity-50"
-            style={{ fontFamily: "'Lato', sans-serif" }}
-          >
-            {streaming ? 'Aguardando agente...' : 'Enviar'}
-          </button>
-          {hasMessages && !streaming && !plan && (
-            <button
-              type="button"
-              onClick={handleGeneratePlan}
-              disabled={planLoading}
-              className="px-4 py-2 border border-[#215A9F] text-[#215A9F] rounded-md text-sm font-medium hover:bg-blue-50 disabled:opacity-50"
-              style={{ fontFamily: "'Lato', sans-serif" }}
-            >
-              {planLoading ? 'Gerando...' : 'Gerar Plano'}
-            </button>
-          )}
-        </div>
-      </form>
+        </form>
+      </div>
     </div>
   )
 }

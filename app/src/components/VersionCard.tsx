@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { Status } from '@prisma/client'
 import { StatusBadge } from './StatusBadge'
-import { AgentChat } from './AgentChat'
 import { DocxPreviewModal } from './DocxPreviewModal'
 import { formatDate } from '@/lib/format'
 import { allStatuses, statusConfig } from '@/lib/status'
@@ -14,6 +13,8 @@ interface VersionCardProps {
   linkDocumento?: string
   status: Status
   dataCriacao: Date
+  isSelected: boolean
+  onSelect: () => void
   onStatusChange: (status: Status) => Promise<void>
 }
 
@@ -23,9 +24,10 @@ export function VersionCard({
   linkDocumento,
   status,
   dataCriacao,
+  isSelected,
+  onSelect,
   onStatusChange,
 }: VersionCardProps) {
-  const [isExpanded, setIsExpanded] = useState(false)
   const [statusLoading, setStatusLoading] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
 
@@ -41,7 +43,14 @@ export function VersionCard({
   }
 
   return (
-    <div className="bg-white rounded-lg p-4 border border-[#9C9B9B]">
+    <div
+      onClick={onSelect}
+      className={`bg-white rounded-lg p-4 border cursor-pointer transition-all ${
+        isSelected
+          ? 'border-[#215A9F] ring-2 ring-[#215A9F]/20'
+          : 'border-[#9C9B9B] hover:border-[#215A9F]/50'
+      }`}
+    >
       <div className="flex items-start justify-between mb-3">
         <div>
           <h4 className="font-bold text-[#0C0E0E]" style={{ fontFamily: "'Lato', sans-serif" }}>
@@ -58,7 +67,7 @@ export function VersionCard({
         <div className="mb-3">
           {isLocalFile ? (
             <button
-              onClick={() => setPreviewOpen(true)}
+              onClick={e => { e.stopPropagation(); setPreviewOpen(true) }}
               className="w-full flex items-center gap-3 p-3 bg-[#F5F5F5] border border-[#9C9B9B] rounded-md hover:border-[#215A9F] hover:bg-blue-50 transition-colors text-left group"
             >
               <div className="flex-shrink-0 w-10 h-12 bg-white border border-[#9C9B9B] rounded flex items-center justify-center shadow-sm group-hover:shadow">
@@ -81,6 +90,7 @@ export function VersionCard({
               href={linkDocumento}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
               className="text-[#215A9F] text-sm hover:underline break-all"
               style={{ fontFamily: "'Lato', sans-serif" }}
             >
@@ -99,7 +109,7 @@ export function VersionCard({
         />
       )}
 
-      <div className="mb-3">
+      <div onClick={e => e.stopPropagation()}>
         <label className="block text-xs font-medium text-[#0C0E0E] mb-1" style={{ fontFamily: "'Lato', sans-serif" }}>
           Atualizar Status
         </label>
@@ -117,20 +127,6 @@ export function VersionCard({
           ))}
         </select>
       </div>
-
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full text-left px-2 py-1 text-sm text-[#215A9F] hover:underline"
-        style={{ fontFamily: "'Lato', sans-serif" }}
-      >
-        {isExpanded ? '▼ Ocultar agente' : '▶ Abrir agente de revisão'}
-      </button>
-
-      {isExpanded && (
-        <div className="mt-4 pt-4 border-t border-[#9C9B9B]">
-          <AgentChat versionId={id} />
-        </div>
-      )}
     </div>
   )
 }
