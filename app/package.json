@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "python3 -m venv scripts/python/.venv && scripts/python/.venv/bin/pip install -q -r scripts/python/requirements.txt && next build",
     "start": "next start",
     "lint": "eslint",
     "prisma:push": "prisma db push",

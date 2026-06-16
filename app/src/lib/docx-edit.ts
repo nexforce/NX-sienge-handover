@@ -5,6 +5,12 @@ import path from 'path'
 
 const SCRIPTS_DIR = path.resolve(process.cwd(), 'scripts', 'python')
 
+// In production the build step creates a dedicated venv with python-docx
+// installed (see package.json "build"). Use it when present; otherwise fall
+// back to the global python3 (local dev, where deps are installed by hand).
+const VENV_PYTHON = path.join(SCRIPTS_DIR, '.venv', 'bin', 'python3')
+const PYTHON_BIN = fs.existsSync(VENV_PYTHON) ? VENV_PYTHON : 'python3'
+
 export interface DocxParagraph {
   index: number
   text: string
@@ -24,7 +30,7 @@ export interface DocxEdit {
 export function extractParagraphs(buffer: Buffer): Promise<DocxParagraph[]> {
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(SCRIPTS_DIR, 'extract_docx_paragraphs.py')
-    const proc = spawn('python3', [scriptPath], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const proc = spawn(PYTHON_BIN, [scriptPath], { stdio: ['pipe', 'pipe', 'pipe'] })
 
     const chunks: Buffer[] = []
     const errChunks: Buffer[] = []
@@ -47,6 +53,10 @@ export function extractParagraphs(buffer: Buffer): Promise<DocxParagraph[]> {
 
     proc.on('error', (err) => reject(new Error(`Failed to spawn python3: ${err.message}`)))
 
+    // The child process may die (e.g. failed import) before consuming stdin,
+    // which makes the write below throw EPIPE as an unhandled stream error.
+    // Ignore it here — the real failure is already captured via proc.on('close').
+    proc.stdin.on('error', () => {})
     proc.stdin.write(buffer)
     proc.stdin.end()
   })
@@ -70,7 +80,7 @@ export function applyEdits(buffer: Buffer, edits: DocxEdit[]): Promise<Buffer> {
       return reject(new Error(`Failed to write edits temp file: ${err}`))
     }
 
-    const proc = spawn('python3', [scriptPath, tmpFile], { stdio: ['pipe', 'pipe', 'pipe'] })
+    const proc = spawn(PYTHON_BIN, [scriptPath, tmpFile], { stdio: ['pipe', 'pipe', 'pipe'] })
 
     const chunks: Buffer[] = []
     const errChunks: Buffer[] = []
@@ -92,6 +102,7 @@ export function applyEdits(buffer: Buffer, edits: DocxEdit[]): Promise<Buffer> {
       reject(new Error(`Failed to spawn python3: ${err.message}`))
     })
 
+    proc.stdin.on('error', () => {})
     proc.stdin.write(buffer)
     proc.stdin.end()
   })
