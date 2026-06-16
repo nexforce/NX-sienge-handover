@@ -37,6 +37,7 @@ model ChatMessage {
   version     DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
   role        MessageRole
   content     String
+  userEmail   String?
   createdAt   DateTime        @default(now())
 }
 
@@ -64,5 +65,6 @@ model UsageLog {
   cacheCreationTokens  Int      @default(0)
   cacheReadTokens      Int      @default(0)
   costUsd              Float
+  userEmail            String?
   createdAt            DateTime @default(now())
 }
