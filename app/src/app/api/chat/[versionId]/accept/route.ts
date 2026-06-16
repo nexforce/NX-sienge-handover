@@ -140,7 +140,7 @@ export async function POST(
   try {
     response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 2048,
+      max_tokens: 8192,
       system: [
         {
           type: 'text',
@@ -174,6 +174,23 @@ Regras críticas:
   }
 
   logUsage('accept', version.document.id, versionId, response.usage, userEmail)
+
+  // If the model hit the output token cap, the propose_docx_edits JSON may be
+  // truncated/incomplete — fail clearly instead of falling through to a
+  // confusing "no edits proposed" error.
+  if (response.stop_reason === 'max_tokens') {
+    console.error(
+      `[accept] Response truncated at max_tokens (output=${response.usage.output_tokens}). ` +
+        'Edits list is likely too large for one request.'
+    )
+    return NextResponse.json(
+      {
+        error:
+          'A resposta do agente foi cortada por limite de tamanho (muitas edições de uma vez). Tente aceitar mudanças menores por vez.',
+      },
+      { status: 500 }
+    )
+  }
 
   // Extract the tool call result
   const toolUse = response.content.find(
