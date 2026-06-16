@@ -18,14 +18,16 @@ export async function GET(req: NextRequest) {
   const processId = searchParams.get('processId') || undefined
   const versionId = searchParams.get('versionId') || undefined
   const chainPrefix = searchParams.get('chain') || undefined
+  const userEmail = searchParams.get('userEmail') || undefined
 
   const where: Prisma.UsageLogWhereInput = {}
   if (processId) where.processId = processId
   if (versionId) where.versionId = versionId
   if (chainPrefix) where.chain = { startsWith: chainPrefix }
+  if (userEmail) where.userEmail = userEmail
 
   try {
-    const [logs, aggregates] = await Promise.all([
+    const [logs, aggregates, userAggregates, allUsers] = await Promise.all([
       prisma.usageLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -35,6 +37,20 @@ export async function GET(req: NextRequest) {
         where,
         _sum: { inputTokens: true, outputTokens: true, costUsd: true },
         _count: { id: true },
+      }),
+      prisma.usageLog.groupBy({
+        by: ['userEmail'],
+        where,
+        _sum: { inputTokens: true, outputTokens: true, costUsd: true },
+        _count: { id: true },
+        orderBy: { _sum: { costUsd: 'desc' } },
+      }),
+      // Always fetch ALL unique users (unfiltered) for the dropdown
+      prisma.usageLog.findMany({
+        select: { userEmail: true },
+        distinct: ['userEmail'],
+        where: { userEmail: { not: null } },
+        orderBy: { userEmail: 'asc' },
       }),
     ])
 
@@ -58,6 +74,14 @@ export async function GET(req: NextRequest) {
         outputTokens: a._sum.outputTokens ?? 0,
         costUsd: a._sum.costUsd ?? 0,
       })),
+      userAggregates: userAggregates.map((u) => ({
+        userEmail: u.userEmail ?? '(desconhecido)',
+        count: u._count.id,
+        inputTokens: u._sum.inputTokens ?? 0,
+        outputTokens: u._sum.outputTokens ?? 0,
+        costUsd: u._sum.costUsd ?? 0,
+      })),
+      users: allUsers.map((u) => u.userEmail).filter(Boolean) as string[],
     })
   } catch {
     return NextResponse.json({ error: 'Erro ao carregar logs.' }, { status: 500 })
