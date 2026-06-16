@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Image from "next/image";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { Status } from "@prisma/client";
 import { MetricsBar } from "@/components/MetricsBar";
 import { DocumentCard } from "@/components/DocumentCard";
+import { FilterBar } from "@/components/FilterBar";
 
 interface Document {
   id: string;
@@ -16,19 +16,39 @@ interface Document {
   ultimaAtualizacao: string;
 }
 
+interface Filters {
+  status: string;
+  search: string;
+  sort: string;
+  revisor: string;
+}
+
+const DEFAULT_FILTERS: Filters = { status: "Todos", search: "", sort: "recent", revisor: "" };
+
 export default function Home() {
   const { data: session } = useSession();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [reviewers, setReviewers] = useState<string[]>([]);
 
   useEffect(() => {
-    fetchDocuments();
+    fetch("/api/documents/reviewers")
+      .then((r) => r.json())
+      .then((data: string[]) => setReviewers(Array.isArray(data) ? data : []))
+      .catch(() => {});
   }, []);
 
-  async function fetchDocuments() {
+  const fetchDocuments = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/documents`);
+      const params = new URLSearchParams();
+      if (filters.status && filters.status !== "Todos") params.set("status", filters.status);
+      if (filters.search) params.set("search", filters.search);
+      if (filters.sort) params.set("sort", filters.sort);
+      if (filters.revisor) params.set("revisor", filters.revisor);
+
+      const response = await fetch(`/api/documents?${params.toString()}`);
       const data = await response.json();
       setDocuments(data);
     } catch (error) {
@@ -36,7 +56,11 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [filters]);
+
+  useEffect(() => {
+    fetchDocuments();
+  }, [fetchDocuments]);
 
   return (
     <div className="min-h-screen bg-white">
@@ -79,6 +103,8 @@ export default function Home() {
       <main className="bg-[#F5F5F5] min-h-screen">
         <div className="max-w-7xl mx-auto px-4 py-8">
           <MetricsBar documents={documents} />
+
+          <FilterBar reviewers={reviewers} onFilter={setFilters} />
 
           {loading ? (
             <div className="text-center py-12">

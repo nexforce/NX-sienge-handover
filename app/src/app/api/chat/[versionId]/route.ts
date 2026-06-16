@@ -15,7 +15,8 @@ function logUsage(
   chain: string,
   processId: string,
   versionId: string,
-  usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null }
+  usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null },
+  userEmail?: string
 ) {
   const cacheCreate = usage.cache_creation_input_tokens ?? 0
   const cacheRead = usage.cache_read_input_tokens ?? 0
@@ -25,7 +26,7 @@ function logUsage(
   const cacheReadCost = (cacheRead / 1_000_000) * 0.30
   const costUsd = inputCost + outputCost + cacheCreateCost + cacheReadCost
   console.log(
-    `[${chain}] processo=${processId} | input=${usage.input_tokens} cacheCreate=${cacheCreate} cacheRead=${cacheRead} output=${usage.output_tokens} | total≈$${costUsd.toFixed(5)}`
+    `[${chain}] processo=${processId} user=${userEmail ?? 'unknown'} | input=${usage.input_tokens} cacheCreate=${cacheCreate} cacheRead=${cacheRead} output=${usage.output_tokens} | total≈$${costUsd.toFixed(5)}`
   )
   prisma.usageLog.create({
     data: {
@@ -37,6 +38,7 @@ function logUsage(
       cacheCreationTokens: cacheCreate,
       cacheReadTokens: cacheRead,
       costUsd,
+      userEmail,
     },
   }).catch((err) => console.error('[UsageLog] Failed to persist:', err))
 }
@@ -92,6 +94,7 @@ export async function POST(
   }
 
   const { versionId } = await params
+  const userEmail = session.user.email ?? undefined
 
   let body: { message?: string }
   try {
@@ -165,7 +168,7 @@ export async function POST(
       try {
         // Save user message before streaming
         await prisma.chatMessage.create({
-          data: { versionId, role: 'user', content: message },
+          data: { versionId, role: 'user', content: message, userEmail },
         })
 
         // Agentic loop: stream → tool_use → execute → continue (max 5 iterations)
@@ -193,7 +196,7 @@ export async function POST(
           }
 
           const finalMsg = await response.finalMessage()
-          logUsage(`chat[${iteration}]`, version.document.id, versionId, finalMsg.usage)
+          logUsage(`chat[${iteration}]`, version.document.id, versionId, finalMsg.usage, userEmail)
 
           if (finalMsg.stop_reason === 'end_turn' || finalMsg.stop_reason !== 'tool_use') break
 
