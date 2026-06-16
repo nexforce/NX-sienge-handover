@@ -202,11 +202,46 @@ Regras críticas:
     return NextResponse.json({ error: 'Agente não propôs edições.' }, { status: 500 })
   }
 
-  const { summary, edits } = toolUse.input as { summary: string; edits: DocxEdit[] }
+  const { summary, edits: proposedEdits } = toolUse.input as { summary: string; edits: DocxEdit[] }
 
-  if (!Array.isArray(edits) || edits.length === 0) {
+  if (!Array.isArray(proposedEdits) || proposedEdits.length === 0) {
     return NextResponse.json({ error: 'Nenhuma edição proposta. Discuta mudanças concretas antes de aceitar.' }, { status: 400 })
   }
+
+  // Defensive pre-validation against the paragraph list we already extracted.
+  // In large/repetitive tables (e.g. property mapping tables) Claude can pick
+  // the wrong index (off-by-one into a neighboring cell). edit_docx.py validates
+  // this too, but aborts the whole batch on the first mismatch — drop just the
+  // bad edits here so the rest (almost certainly correct) still go through.
+  const invalidEdits: { edit: DocxEdit; reason: string }[] = []
+  const edits = proposedEdits.filter((edit) => {
+    const para = paragraphs[edit.paragraph_index]
+    if (!para) {
+      invalidEdits.push({ edit, reason: 'paragraph_index fora do intervalo do documento' })
+      return false
+    }
+    if (edit.old_text_snippet && para.text && !para.text.includes(edit.old_text_snippet)) {
+      invalidEdits.push({ edit, reason: `snippet não encontrado no parágrafo ${edit.paragraph_index} (texto atual: ${JSON.stringify(para.text)})` })
+      return false
+    }
+    return true
+  })
+
+  if (invalidEdits.length > 0) {
+    console.warn('[accept] Dropping invalid edits:', JSON.stringify(invalidEdits))
+  }
+
+  if (edits.length === 0) {
+    return NextResponse.json(
+      { error: 'Nenhuma das edições propostas correspondeu ao texto atual do documento. Tente reformular o pedido de mudança.' },
+      { status: 400 }
+    )
+  }
+
+  const finalSummary =
+    invalidEdits.length > 0
+      ? `${summary}\n\n(${invalidEdits.length} edição(ões) proposta(s) pelo agente não correspondeu(eram) ao texto atual do documento e foi(ram) ignorada(s).)`
+      : summary
 
   // Apply edits to the base document
   let newDocBuffer: Buffer
@@ -234,7 +269,7 @@ Regras críticas:
       documentId: version.documentId,
       numeroVersao: `V${nextNum}`,
       fileContent: new Uint8Array(newDocBuffer.buffer, newDocBuffer.byteOffset, newDocBuffer.byteLength) as Uint8Array<ArrayBuffer>,
-      changeLog: summary,
+      changeLog: finalSummary,
       status: Status.Pendente,
     },
   })
