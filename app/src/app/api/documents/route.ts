@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get('status')
   const search = searchParams.get('search')
   const sort = searchParams.get('sort') || 'recent'
+  const revisor = searchParams.get('revisor')
 
   const where: any = {}
 
@@ -19,6 +20,10 @@ export async function GET(request: NextRequest) {
       { nome: { contains: search, mode: 'insensitive' } },
       { revisor: { contains: search, mode: 'insensitive' } },
     ]
+  }
+
+  if (revisor) {
+    where.revisor = revisor
   }
 
   let orderBy: any = { ultimaAtualizacao: 'desc' }
