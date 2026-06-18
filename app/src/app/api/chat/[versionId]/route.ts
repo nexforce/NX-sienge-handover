@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/auth'
 import {
@@ -9,56 +9,55 @@ import {
   executeReadProcessFiles,
 } from '@/lib/agent-context'
 
-const anthropic = new Anthropic()
+const openai = new OpenAI({
+  apiKey: process.env.NFC_TOKEN,
+  baseURL: 'https://router.nexforce.ai/v1',
+})
 
 function logUsage(
   chain: string,
   processId: string,
   versionId: string,
-  usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null },
+  usage: { prompt_tokens: number; completion_tokens: number },
   userEmail?: string
 ) {
-  const cacheCreate = usage.cache_creation_input_tokens ?? 0
-  const cacheRead = usage.cache_read_input_tokens ?? 0
-  const inputCost = (usage.input_tokens / 1_000_000) * 3
-  const outputCost = (usage.output_tokens / 1_000_000) * 15
-  const cacheCreateCost = (cacheCreate / 1_000_000) * 3.75
-  const cacheReadCost = (cacheRead / 1_000_000) * 0.30
-  const costUsd = inputCost + outputCost + cacheCreateCost + cacheReadCost
   console.log(
-    `[${chain}] processo=${processId} user=${userEmail ?? 'unknown'} | input=${usage.input_tokens} cacheCreate=${cacheCreate} cacheRead=${cacheRead} output=${usage.output_tokens} | total≈$${costUsd.toFixed(5)}`
+    `[${chain}] processo=${processId} user=${userEmail ?? 'unknown'} | input=${usage.prompt_tokens} output=${usage.completion_tokens}`
   )
   prisma.usageLog.create({
     data: {
       processId,
       versionId,
       chain,
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-      cacheCreationTokens: cacheCreate,
-      cacheReadTokens: cacheRead,
-      costUsd,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      costUsd: 0,
       userEmail,
     },
   }).catch((err) => console.error('[UsageLog] Failed to persist:', err))
 }
 
-const READ_FILES_TOOL: Anthropic.Tool = {
-  name: 'read_process_files',
-  description:
-    'Lê arquivos de referência do processo (ClickUp, Drive, HubSpot). Use quando precisar de mais contexto sobre regras de negócio, tickets, configurações ou escopos. Não use em toda mensagem — apenas quando a conversa exigir.',
-  input_schema: {
-    type: 'object' as const,
-    required: ['file_type'],
-    properties: {
-      file_type: {
-        type: 'string',
-        enum: ['clickup', 'drive', 'hubspot'],
-        description: 'Tipo de arquivo a consultar.',
-      },
-      file_name: {
-        type: 'string',
-        description: 'Nome do arquivo (ex: "8.1 - Integrações Oracle.md"). Se omitido, retorna lista de arquivos disponíveis.',
+const READ_FILES_TOOL: OpenAI.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'read_process_files',
+    description:
+      'Lê arquivos de referência do processo (ClickUp, Drive, HubSpot). Use quando precisar de mais contexto sobre regras de negócio, tickets, configurações ou escopos. Não use em toda mensagem — apenas quando a conversa exigir.',
+    parameters: {
+      type: 'object',
+      required: ['file_type'],
+      properties: {
+        file_type: {
+          type: 'string',
+          enum: ['clickup', 'drive', 'hubspot'],
+          description: 'Tipo de arquivo a consultar.',
+        },
+        file_name: {
+          type: 'string',
+          description: 'Nome do arquivo (ex: "8.1 - Integrações Oracle.md"). Se omitido, retorna lista de arquivos disponíveis.',
+        },
       },
     },
   },
@@ -171,51 +170,87 @@ export async function POST(
           data: { versionId, role: 'user', content: message, userEmail },
         })
 
-        // Agentic loop: stream → tool_use → execute → continue (max 5 iterations)
-        let loopMessages: Anthropic.MessageParam[] = truncated
+        // Agentic loop: stream → tool_calls → execute → continue (max 5 iterations)
+        const loopMessages: OpenAI.ChatCompletionMessageParam[] = [
+          { role: 'system', content: fullSystem },
+          ...truncated,
+        ]
         const MAX_ITERATIONS = 5
 
+        const STATUS_LABELS: Record<string, string> = {
+          clickup: 'Lendo tarefas do ClickUp...',
+          drive:   'Lendo documentos do Drive...',
+          hubspot: 'Lendo dados do HubSpot...',
+        }
+
         for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-          const response = anthropic.messages.stream({
-            model: 'claude-sonnet-4-6',
+          const streamResponse = await openai.chat.completions.create({
+            model: 'deepseek-v4-flash',
             max_tokens: 4096,
-            system: [{ type: 'text', text: fullSystem, cache_control: { type: 'ephemeral' } }],
             messages: loopMessages,
             tools: [READ_FILES_TOOL],
-            tool_choice: { type: 'auto' },
+            tool_choice: 'auto',
+            stream: true,
+            stream_options: { include_usage: true },
           })
 
-          for await (const event of response) {
-            if (
-              event.type === 'content_block_delta' &&
-              event.delta.type === 'text_delta'
-            ) {
-              assistantContent += event.delta.text
-              enqueue(event.delta.text)
+          let iterationText = ''
+          let finishReason = ''
+          let usage: OpenAI.CompletionUsage | undefined
+          const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>()
+
+          for await (const chunk of streamResponse) {
+            if (chunk.usage) usage = chunk.usage
+
+            const choice = chunk.choices[0]
+            if (!choice) continue
+
+            const delta = choice.delta
+
+            if (delta.content) {
+              iterationText += delta.content
+              assistantContent += delta.content
+              enqueue(delta.content)
             }
+
+            if (delta.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                if (!toolCallsMap.has(tc.index)) {
+                  toolCallsMap.set(tc.index, { id: '', name: '', arguments: '' })
+                }
+                const acc = toolCallsMap.get(tc.index)!
+                if (tc.id) acc.id = tc.id
+                if (tc.function?.name) acc.name = tc.function.name
+                acc.arguments += tc.function?.arguments ?? ''
+              }
+            }
+
+            if (choice.finish_reason) finishReason = choice.finish_reason
           }
 
-          const finalMsg = await response.finalMessage()
-          logUsage(`chat[${iteration}]`, version.document.id, versionId, finalMsg.usage, userEmail)
+          if (usage) logUsage(`chat[${iteration}]`, version.document.id, versionId, usage, userEmail)
 
-          if (finalMsg.stop_reason === 'end_turn' || finalMsg.stop_reason !== 'tool_use') break
+          if (finishReason !== 'tool_calls') break
 
-          // Execute tool calls
-          const toolUseBlocks = finalMsg.content.filter(
-            (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
-          )
+          const toolCalls = Array.from(toolCallsMap.values())
 
-          const STATUS_LABELS: Record<string, string> = {
-            clickup: 'Lendo tarefas do ClickUp...',
-            drive:   'Lendo documentos do Drive...',
-            hubspot: 'Lendo dados do HubSpot...',
-          }
+          // Append assistant message with tool_calls
+          loopMessages.push({
+            role: 'assistant',
+            content: iterationText || null,
+            tool_calls: toolCalls.map(tc => ({
+              id: tc.id,
+              type: 'function' as const,
+              function: { name: tc.name, arguments: tc.arguments },
+            })),
+          })
 
-          const toolResults: Anthropic.ToolResultBlockParam[] = toolUseBlocks.map(block => {
-            const input = block.input as { file_type?: string; file_name?: string }
+          // Execute tools and append results
+          for (const tc of toolCalls) {
+            let input: { file_type?: string; file_name?: string } = {}
+            try { input = JSON.parse(tc.arguments) } catch { /* ignore */ }
             const fileType = (input.file_type ?? '') as 'clickup' | 'drive' | 'hubspot'
 
-            // Send visible status to client before executing
             const label = STATUS_LABELS[fileType] ?? 'Lendo arquivos do processo...'
             controller.enqueue(
               new TextEncoder().encode(`data: ${JSON.stringify({ status: label })}\n\n`)
@@ -223,14 +258,9 @@ export async function POST(
 
             const result = executeReadProcessFiles(version.document.id, fileType, input.file_name)
             console.log(`[tool] read_process_files file_type=${fileType} file_name=${input.file_name ?? '(list)'}`)
-            return { type: 'tool_result', tool_use_id: block.id, content: result }
-          })
 
-          loopMessages = [
-            ...loopMessages,
-            { role: 'assistant', content: finalMsg.content },
-            { role: 'user', content: toolResults },
-          ]
+            loopMessages.push({ role: 'tool', tool_call_id: tc.id, content: result })
+          }
         }
 
         // Save assistant response (text only)

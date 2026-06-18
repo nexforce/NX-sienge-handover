@@ -1,74 +1,73 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/auth'
 import { extractParagraphs, applyEdits, DocxEdit } from '@/lib/docx-edit'
 import { Status } from '@prisma/client'
 
-const anthropic = new Anthropic()
+const openai = new OpenAI({
+  apiKey: process.env.NFC_TOKEN,
+  baseURL: 'https://router.nexforce.ai/v1',
+})
 
 function logUsage(
   chain: string,
   processId: string,
   versionId: string,
-  usage: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null },
+  usage: { prompt_tokens: number; completion_tokens: number },
   userEmail?: string
 ) {
-  const cacheCreate = usage.cache_creation_input_tokens ?? 0
-  const cacheRead = usage.cache_read_input_tokens ?? 0
-  const inputCost = (usage.input_tokens / 1_000_000) * 3
-  const outputCost = (usage.output_tokens / 1_000_000) * 15
-  const cacheCreateCost = (cacheCreate / 1_000_000) * 3.75
-  const cacheReadCost = (cacheRead / 1_000_000) * 0.30
-  const costUsd = inputCost + outputCost + cacheCreateCost + cacheReadCost
   console.log(
-    `[${chain}] processo=${processId} user=${userEmail ?? 'unknown'} | input=${usage.input_tokens} cacheCreate=${cacheCreate} cacheRead=${cacheRead} output=${usage.output_tokens} | total≈$${costUsd.toFixed(5)}`
+    `[${chain}] processo=${processId} user=${userEmail ?? 'unknown'} | input=${usage.prompt_tokens} output=${usage.completion_tokens}`
   )
   prisma.usageLog.create({
     data: {
       processId,
       versionId,
       chain,
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-      cacheCreationTokens: cacheCreate,
-      cacheReadTokens: cacheRead,
-      costUsd,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      costUsd: 0,
       userEmail,
     },
   }).catch((err) => console.error('[UsageLog] Failed to persist:', err))
 }
 
-const PROPOSE_EDITS_TOOL: Anthropic.Tool = {
-  name: 'propose_docx_edits',
-  description:
-    'Propõe uma lista de edições precisas ao documento .docx atual, baseadas na conversa de revisão. Cada edit referencia um parágrafo pelo índice e valida o trecho de texto original antes de substituir.',
-  input_schema: {
-    type: 'object' as const,
-    required: ['summary', 'edits'],
-    properties: {
-      summary: {
-        type: 'string',
-        description: 'Resumo em 1-2 frases das mudanças realizadas. Será salvo como changeLog da nova versão.',
-      },
-      edits: {
-        type: 'array',
-        description: 'Lista de edições a aplicar ao documento. Cada item altera exatamente um parágrafo.',
-        items: {
-          type: 'object',
-          required: ['paragraph_index', 'old_text_snippet', 'new_text'],
-          properties: {
-            paragraph_index: {
-              type: 'integer',
-              description: 'Índice do parágrafo a editar (começa em 0, mesmo índice da lista fornecida).',
-            },
-            old_text_snippet: {
-              type: 'string',
-              description: 'Trecho do texto atual do parágrafo para validar que o índice está correto. Pode ser substring.',
-            },
-            new_text: {
-              type: 'string',
-              description: 'Novo conteúdo completo do parágrafo (substitui o parágrafo inteiro).',
+const PROPOSE_EDITS_TOOL: OpenAI.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'propose_docx_edits',
+    description:
+      'Propõe uma lista de edições precisas ao documento .docx atual, baseadas na conversa de revisão. Cada edit referencia um parágrafo pelo índice e valida o trecho de texto original antes de substituir.',
+    parameters: {
+      type: 'object',
+      required: ['summary', 'edits'],
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'Resumo em 1-2 frases das mudanças realizadas. Será salvo como changeLog da nova versão.',
+        },
+        edits: {
+          type: 'array',
+          description: 'Lista de edições a aplicar ao documento. Cada item altera exatamente um parágrafo.',
+          items: {
+            type: 'object',
+            required: ['paragraph_index', 'old_text_snippet', 'new_text'],
+            properties: {
+              paragraph_index: {
+                type: 'integer',
+                description: 'Índice do parágrafo a editar (começa em 0, mesmo índice da lista fornecida).',
+              },
+              old_text_snippet: {
+                type: 'string',
+                description: 'Trecho do texto atual do parágrafo para validar que o índice está correto. Pode ser substring.',
+              },
+              new_text: {
+                type: 'string',
+                description: 'Novo conteúdo completo do parágrafo (substitui o parágrafo inteiro).',
+              },
             },
           },
         },
@@ -136,15 +135,15 @@ export async function POST(
     .join('\n\n')
 
   // Single call with forced propose_docx_edits tool
-  let response: Anthropic.Message
+  let response: OpenAI.ChatCompletion
   try {
-    response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+    response = await openai.chat.completions.create({
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
-      system: [
+      messages: [
         {
-          type: 'text',
-          text: `Você é um assistente especializado em aplicar mudanças de documentação. Você receberá:
+          role: 'system',
+          content: `Você é um assistente especializado em aplicar mudanças de documentação. Você receberá:
 1. O histórico de uma conversa de revisão entre o revisor e o agente.
 2. A lista de parágrafos numerados do documento atual (formato: [índice] texto).
 
@@ -155,32 +154,30 @@ Regras críticas:
 - old_text_snippet DEVE ser uma substring literal do texto atual do parágrafo — copie diretamente da lista. NUNCA invente ou parafrasie o snippet.
 - PREFIRA sempre parágrafos com conteúdo (texto não vazio). Parágrafos vazios são separadores de espaçamento e têm estilos imprevisíveis — evite usá-los como alvo. Use um parágrafo vazio somente se não houver alternativa, e nesse caso use old_text_snippet: "".
 - Para ADICIONAR conteúdo a uma seção: edite o último parágrafo não-vazio da seção para expandir seu conteúdo, ou atualize o parágrafo de título da seção com o texto novo logo abaixo. Nunca ponha conteúdo novo num parágrafo vazio de separação.
+- Para ADICIONAR LINHAS A UMA TABELA: identifique a última célula não-vazia da tabela (a última linha de dados existente) e edite-a para incluir o novo conteúdo concatenado. NUNCA crie parágrafos fora da tabela para representar novas linhas. Tabelas no .docx são estruturas fechadas — qualquer parágrafo adicionado após a tabela fica fora dela, não dentro.
 - Seja conservador: inclua apenas mudanças com suporte claro na conversa.`,
-          cache_control: { type: 'ephemeral' },
         },
-      ],
-      messages: [
         {
           role: 'user',
           content: `## Conversa de revisão\n\n${chatHistory}\n\n## Parágrafos do documento (índice → texto)\n\n${paragraphList}\n\nPropõe as edições necessárias.`,
         },
       ],
       tools: [PROPOSE_EDITS_TOOL],
-      tool_choice: { type: 'tool', name: 'propose_docx_edits' },
+      tool_choice: { type: 'function', function: { name: 'propose_docx_edits' } },
     })
   } catch (err) {
-    console.error('[accept] Anthropic API error:', err)
+    console.error('[accept] API error:', err)
     return NextResponse.json({ error: 'Falha ao gerar edições. Tente novamente.' }, { status: 500 })
   }
 
-  logUsage('accept', version.document.id, versionId, response.usage, userEmail)
+  if (response.usage) logUsage('accept', version.document.id, versionId, response.usage, userEmail)
 
   // If the model hit the output token cap, the propose_docx_edits JSON may be
   // truncated/incomplete — fail clearly instead of falling through to a
   // confusing "no edits proposed" error.
-  if (response.stop_reason === 'max_tokens') {
+  if (response.choices[0]?.finish_reason === 'length') {
     console.error(
-      `[accept] Response truncated at max_tokens (output=${response.usage.output_tokens}). ` +
+      `[accept] Response truncated at max_tokens (output=${response.usage?.completion_tokens}). ` +
         'Edits list is likely too large for one request.'
     )
     return NextResponse.json(
@@ -193,23 +190,31 @@ Regras críticas:
   }
 
   // Extract the tool call result
-  const toolUse = response.content.find(
-    (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use' && b.name === 'propose_docx_edits'
+  const toolCall = response.choices[0]?.message.tool_calls?.find(
+    tc => tc.function.name === 'propose_docx_edits'
   )
 
-  if (!toolUse) {
+  if (!toolCall) {
     console.error('[accept] No propose_docx_edits tool call in response')
     return NextResponse.json({ error: 'Agente não propôs edições.' }, { status: 500 })
   }
 
-  const { summary, edits: proposedEdits } = toolUse.input as { summary: string; edits: DocxEdit[] }
+  let parsed: { summary: string; edits: DocxEdit[] }
+  try {
+    parsed = JSON.parse(toolCall.function.arguments)
+  } catch (err) {
+    console.error('[accept] Failed to parse tool arguments:', err)
+    return NextResponse.json({ error: 'Falha ao interpretar edições propostas.' }, { status: 500 })
+  }
+
+  const { summary, edits: proposedEdits } = parsed
 
   if (!Array.isArray(proposedEdits) || proposedEdits.length === 0) {
     return NextResponse.json({ error: 'Nenhuma edição proposta. Discuta mudanças concretas antes de aceitar.' }, { status: 400 })
   }
 
   // Defensive pre-validation against the paragraph list we already extracted.
-  // In large/repetitive tables (e.g. property mapping tables) Claude can pick
+  // In large/repetitive tables (e.g. property mapping tables) the model can pick
   // the wrong index (off-by-one into a neighboring cell). edit_docx.py validates
   // this too, but aborts the whole batch on the first mismatch — drop just the
   // bad edits here so the rest (almost certainly correct) still go through.
@@ -260,8 +265,8 @@ Regras críticas:
     where: { documentId: version.documentId },
     orderBy: { dataCriacao: 'desc' },
   })
-  const parsed = lastVersion ? parseInt(lastVersion.numeroVersao.replace('V', ''), 10) : NaN
-  const nextNum = Number.isFinite(parsed) ? parsed + 1 : 1
+  const parsed2 = lastVersion ? parseInt(lastVersion.numeroVersao.replace('V', ''), 10) : NaN
+  const nextNum = Number.isFinite(parsed2) ? parsed2 + 1 : 1
 
   // Create new DocumentVersion with the edited binary
   const newVersion = await prisma.documentVersion.create({
