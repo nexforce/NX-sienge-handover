@@ -60,7 +60,7 @@ async function main() {
   // Update in-place — same version, same reviewer context
   await prisma.documentVersion.update({
     where: { id: version.id },
-    data: { fileContent: modifiedDocx },
+    data: { fileContent: new Uint8Array(modifiedDocx.buffer, modifiedDocx.byteOffset, modifiedDocx.byteLength) as Uint8Array<ArrayBuffer> },
   })
 
   console.log(`Updated version ${version.id} in DB.`)
