@@ -13,13 +13,21 @@ interface AgentChatProps {
   versionId: string
 }
 
+interface AcceptResult {
+  versionId: string
+  numeroVersao: string
+  appliedEdits?: number
+  proposedEdits?: number
+  droppedEdits?: number
+}
+
 export function AgentChat({ versionId }: AgentChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [acceptLoading, setAcceptLoading] = useState(false)
-  const [acceptedVersion, setAcceptedVersion] = useState<{ versionId: string; numeroVersao: string } | null>(null)
+  const [acceptedVersion, setAcceptedVersion] = useState<AcceptResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [toolStatus, setToolStatus] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -128,7 +136,7 @@ export function AgentChat({ versionId }: AgentChatProps) {
         const body = await res.json().catch(() => ({}))
         throw new Error((body as { error?: string }).error || 'Falha ao criar nova versão.')
       }
-      const data: { versionId: string; numeroVersao: string } = await res.json()
+      const data: AcceptResult = await res.json()
       setAcceptedVersion(data)
     } catch (err) {
       setError((err as Error).message)
@@ -194,6 +202,16 @@ export function AgentChat({ versionId }: AgentChatProps) {
         {acceptedVersion && (
           <div className="border border-green-400 rounded-lg p-3 bg-green-50 text-sm text-green-800" style={{ fontFamily: "'Lato', sans-serif" }}>
             Nova versão <strong>{acceptedVersion.numeroVersao}</strong> criada. Recarregue a página para visualizá-la.
+            {typeof acceptedVersion.appliedEdits === 'number' && (
+              <span className="block mt-1 text-green-900">
+                {acceptedVersion.appliedEdits} de {acceptedVersion.proposedEdits} edição(ões) aplicada(s).
+              </span>
+            )}
+            {acceptedVersion.droppedEdits ? (
+              <span className="block mt-1 text-amber-700">
+                ⚠ {acceptedVersion.droppedEdits} edição(ões) proposta(s) não correspondeu(eram) ao texto atual e foi(ram) ignorada(s). Reformule o pedido e tente novamente se faltou algo.
+              </span>
+            ) : null}
           </div>
         )}
 

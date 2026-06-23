@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/auth'
-import { extractParagraphs, applyEdits, DocxEdit } from '@/lib/docx-edit'
+import { extractStructure, applyStructuredEdits, normalizeText, StructuredEdit, DocBlock } from '@/lib/docx-edit'
 import { Status } from '@prisma/client'
 
 const openai = new OpenAI({
@@ -40,7 +40,7 @@ const PROPOSE_EDITS_TOOL: OpenAI.ChatCompletionTool = {
   function: {
     name: 'propose_docx_edits',
     description:
-      'Propõe uma lista de edições precisas ao documento .docx atual, baseadas na conversa de revisão. Cada edit referencia um parágrafo pelo índice e valida o trecho de texto original antes de substituir.',
+      'Propõe uma lista de edições precisas ao documento .docx atual, baseadas na conversa de revisão. Cada edit endereça um bloco top-level por índice e, dentro de tabelas, por linha/coluna.',
     parameters: {
       type: 'object',
       required: ['summary', 'edits'],
@@ -51,22 +51,53 @@ const PROPOSE_EDITS_TOOL: OpenAI.ChatCompletionTool = {
         },
         edits: {
           type: 'array',
-          description: 'Lista de edições a aplicar ao documento. Cada item altera exatamente um parágrafo.',
+          description: 'Lista de operações a aplicar ao documento, endereçadas por bloco (e linha/coluna em tabelas).',
           items: {
             type: 'object',
-            required: ['paragraph_index', 'old_text_snippet', 'new_text'],
+            required: ['operation', 'block'],
             properties: {
-              paragraph_index: {
+              operation: {
+                type: 'string',
+                enum: [
+                  'replace_paragraph',
+                  'insert_paragraph_after',
+                  'insert_paragraph_before',
+                  'delete_paragraph',
+                  'set_cell',
+                  'insert_row_after',
+                  'delete_row',
+                ],
+                description:
+                  'replace_paragraph: troca o texto de um parágrafo solto por new_text. insert_paragraph_after/before: cria um parágrafo novo (new_text) depois/antes do bloco. delete_paragraph: remove o parágrafo. set_cell: troca o texto da célula (block,row,col) por new_text. insert_row_after: adiciona uma linha à tabela após after_row, preenchendo new_row_cells. delete_row: remove a linha (block,row).',
+              },
+              block: {
                 type: 'integer',
-                description: 'Índice do parágrafo a editar (começa em 0, mesmo índice da lista fornecida).',
+                description: 'Índice do bloco top-level (conforme a estrutura fornecida). Para parágrafos é um bloco "paragraph"; para operações de tabela é o bloco "table".',
+              },
+              row: {
+                type: 'integer',
+                description: 'Linha alvo da tabela (0 = cabeçalho). Para set_cell e delete_row.',
+              },
+              col: {
+                type: 'integer',
+                description: 'Coluna alvo da tabela (começa em 0). Para set_cell.',
+              },
+              after_row: {
+                type: 'integer',
+                description: 'Linha-âncora; a nova linha entra logo abaixo dela. Para insert_row_after (use a última linha de dados).',
               },
               old_text_snippet: {
                 type: 'string',
-                description: 'Trecho do texto atual do parágrafo para validar que o índice está correto. Pode ser substring.',
+                description: 'Trecho LITERAL do texto atual do alvo (parágrafo ou célula), para validação. Copie da estrutura; não parafraseie.',
               },
               new_text: {
                 type: 'string',
-                description: 'Novo conteúdo completo do parágrafo (substitui o parágrafo inteiro).',
+                description: 'Conteúdo novo para replace_paragraph, insert_paragraph_* e set_cell.',
+              },
+              new_row_cells: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Valores das células da nova linha (um por coluna, na ordem das colunas). Obrigatório para insert_row_after.',
               },
             },
           },
@@ -74,6 +105,30 @@ const PROPOSE_EDITS_TOOL: OpenAI.ChatCompletionTool = {
       },
     },
   },
+}
+
+const PARA_OPS = new Set([
+  'replace_paragraph',
+  'insert_paragraph_after',
+  'insert_paragraph_before',
+  'delete_paragraph',
+])
+const TABLE_OPS = new Set(['set_cell', 'insert_row_after', 'delete_row'])
+
+/** Renderiza a estrutura do documento para o prompt: blocos numerados + tabelas como grade. */
+function renderStructure(blocks: DocBlock[]): string {
+  const lines: string[] = []
+  for (const b of blocks) {
+    if (b.kind === 'paragraph') {
+      lines.push(`[block ${b.block}] (paragraph) ${b.text}`)
+    } else {
+      lines.push(`[block ${b.block}] (table ${b.n_rows}x${b.n_cols})`)
+      b.rows.forEach((row, r) => {
+        lines.push(`   row ${r}: ${row.map((c, ci) => `(col ${ci}) ${c}`).join(' | ')}`)
+      })
+    }
+  }
+  return lines.join('\n')
 }
 
 export async function POST(
@@ -115,19 +170,18 @@ export async function POST(
 
   const baseBuffer = Buffer.from(version.fileContent)
 
-  // Extract paragraphs from the base file
-  let paragraphs: { index: number; text: string }[]
+  // Extract the structured block outline from the base file
+  let blocks: DocBlock[]
   try {
-    paragraphs = await extractParagraphs(baseBuffer)
+    const structure = await extractStructure(baseBuffer)
+    blocks = structure.blocks
   } catch (err) {
-    console.error('[accept] extractParagraphs error:', err)
-    return NextResponse.json({ error: 'Falha ao extrair parágrafos do documento.' }, { status: 500 })
+    console.error('[accept] extractStructure error:', err)
+    return NextResponse.json({ error: 'Falha ao extrair a estrutura do documento.' }, { status: 500 })
   }
 
-  // Build the paragraph list for the prompt
-  const paragraphList = paragraphs
-    .map(p => `[${p.index}] ${p.text}`)
-    .join('\n')
+  const byBlock = new Map(blocks.map(b => [b.block, b]))
+  const structureOutline = renderStructure(blocks)
 
   // Build chat history for context
   const chatHistory = version.chatMessages
@@ -138,32 +192,45 @@ export async function POST(
   let response: OpenAI.ChatCompletion
   try {
     response = await openai.chat.completions.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8192,
+      model: 'deepseek-v4-pro',
+      max_tokens: 16384,
       messages: [
         {
           role: 'system',
           content: `Você é um assistente especializado em aplicar mudanças de documentação. Você receberá:
 1. O histórico de uma conversa de revisão entre o revisor e o agente.
-2. A lista de parágrafos numerados do documento atual (formato: [índice] texto).
+2. A ESTRUTURA do documento atual em blocos top-level numerados. Cada bloco é:
+   - "[block N] (paragraph) texto"  → um parágrafo solto, endereçado por block.
+   - "[block N] (table RxC)" seguido de "row r: (col 0) ... | (col 1) ..." → uma tabela, endereçada por block + row + col.
 
-Sua tarefa: propor exatamente quais parágrafos devem mudar, com o novo texto, baseado nas mudanças discutidas na conversa. Use a ferramenta propose_docx_edits.
+Sua tarefa: propor exatamente quais operações aplicar, baseado nas mudanças discutidas na conversa. Use a ferramenta propose_docx_edits.
+
+Operações (campo "operation"):
+- replace_paragraph {block, new_text}: troca o texto de um parágrafo solto existente.
+- insert_paragraph_after / insert_paragraph_before {block, new_text}: cria um parágrafo NOVO depois/antes de um bloco parágrafo.
+- delete_paragraph {block}: remove um parágrafo solto.
+- set_cell {block, row, col, new_text}: troca o texto de UMA célula de tabela. Use para corrigir/reescrever conteúdo de célula.
+- insert_row_after {block, after_row, new_row_cells}: adiciona uma LINHA NOVA à tabela após after_row (use a última linha de dados). new_row_cells tem um valor por coluna, na ordem das colunas.
+- delete_row {block, row}: remove uma linha da tabela.
 
 Regras críticas:
-- Edite apenas o que foi explicitamente discutido na conversa.
-- old_text_snippet DEVE ser uma substring literal do texto atual do parágrafo — copie diretamente da lista. NUNCA invente ou parafrasie o snippet.
-- PREFIRA sempre parágrafos com conteúdo (texto não vazio). Parágrafos vazios são separadores de espaçamento e têm estilos imprevisíveis — evite usá-los como alvo. Use um parágrafo vazio somente se não houver alternativa, e nesse caso use old_text_snippet: "".
-- Para ADICIONAR conteúdo a uma seção: edite o último parágrafo não-vazio da seção para expandir seu conteúdo, ou atualize o parágrafo de título da seção com o texto novo logo abaixo. Nunca ponha conteúdo novo num parágrafo vazio de separação.
-- Para ADICIONAR LINHAS A UMA TABELA: identifique a última célula não-vazia da tabela (a última linha de dados existente) e edite-a para incluir o novo conteúdo concatenado. NUNCA crie parágrafos fora da tabela para representar novas linhas. Tabelas no .docx são estruturas fechadas — qualquer parágrafo adicionado após a tabela fica fora dela, não dentro.
-- Seja conservador: inclua apenas mudanças com suporte claro na conversa.`,
+- Edite apenas o que foi explicitamente discutido na conversa. Seja conservador.
+- ENDEREÇAMENTO EXATO: para mexer numa célula, use set_cell com block+row+col exatos da estrutura. Para mexer num parágrafo, use o block dele. Não confunda parágrafo com tabela.
+- Para conteúdo NOVO numa tabela use SEMPRE insert_row_after (nunca insert_paragraph_*, que ficaria fora da tabela). Para conteúdo novo de texto corrido use insert_paragraph_*.
+- old_text_snippet (opcional, mas recomendado) DEVE ser um trecho literal do texto atual do alvo — copie da estrutura; serve para validar o endereço.
+- block/row/col sempre se referem ao documento ATUAL mostrado abaixo. As inserções são resolvidas por âncora; não recalcule índices entre operações.`,
         },
         {
           role: 'user',
-          content: `## Conversa de revisão\n\n${chatHistory}\n\n## Parágrafos do documento (índice → texto)\n\n${paragraphList}\n\nPropõe as edições necessárias.`,
+          content: `## Conversa de revisão\n\n${chatHistory}\n\n## Estrutura do documento (blocos numerados)\n\n${structureOutline}\n\nPropõe as edições necessárias.`,
         },
       ],
       tools: [PROPOSE_EDITS_TOOL],
-      tool_choice: { type: 'function', function: { name: 'propose_docx_edits' } },
+      // deepseek-v4-pro roda em "thinking mode", que rejeita tool_choice forçado
+      // (400 "Thinking mode does not support this tool_choice"). Usamos 'auto' — o
+      // system prompt instrui a chamar a tool, e o guard de "sem tool call" abaixo
+      // cobre o caso raro de o modelo responder só com texto.
+      tool_choice: 'auto',
     })
   } catch (err) {
     console.error('[accept] API error:', err)
@@ -199,7 +266,7 @@ Regras críticas:
     return NextResponse.json({ error: 'Agente não propôs edições.' }, { status: 500 })
   }
 
-  let parsed: { summary: string; edits: DocxEdit[] }
+  let parsed: { summary: string; edits: StructuredEdit[] }
   try {
     parsed = JSON.parse(toolCall.function.arguments)
   } catch (err) {
@@ -213,23 +280,55 @@ Regras críticas:
     return NextResponse.json({ error: 'Nenhuma edição proposta. Discuta mudanças concretas antes de aceitar.' }, { status: 400 })
   }
 
-  // Defensive pre-validation against the paragraph list we already extracted.
-  // In large/repetitive tables (e.g. property mapping tables) the model can pick
-  // the wrong index (off-by-one into a neighboring cell). edit_docx.py validates
-  // this too, but aborts the whole batch on the first mismatch — drop just the
-  // bad edits here so the rest (almost certainly correct) still go through.
-  const invalidEdits: { edit: DocxEdit; reason: string }[] = []
+  // Pre-validação por endereço estruturado. Com coordenadas exatas (block/row/col)
+  // não há re-ancoragem: cada edit é validado contra a estrutura já extraída e,
+  // se o endereço/tipo não bater, é descartado e reportado (sem editar à toa).
+  const invalidEdits: { edit: StructuredEdit; reason: string }[] = []
+  const snippetMatches = (text: string | undefined, snippet?: string) =>
+    !snippet || !text || normalizeText(text).includes(normalizeText(snippet))
+
   const edits = proposedEdits.filter((edit) => {
-    const para = paragraphs[edit.paragraph_index]
-    if (!para) {
-      invalidEdits.push({ edit, reason: 'paragraph_index fora do intervalo do documento' })
+    const drop = (reason: string) => {
+      invalidEdits.push({ edit, reason })
       return false
     }
-    if (edit.old_text_snippet && para.text && !para.text.includes(edit.old_text_snippet)) {
-      invalidEdits.push({ edit, reason: `snippet não encontrado no parágrafo ${edit.paragraph_index} (texto atual: ${JSON.stringify(para.text)})` })
-      return false
+
+    const block = byBlock.get(edit.block)
+    if (!block) return drop(`block ${edit.block} fora do intervalo do documento`)
+
+    if (PARA_OPS.has(edit.operation)) {
+      if (block.kind !== 'paragraph') return drop(`operação ${edit.operation} requer bloco paragraph, mas block ${edit.block} é tabela`)
+      if (edit.operation === 'replace_paragraph' && !snippetMatches(block.text, edit.old_text_snippet)) {
+        return drop(`snippet não corresponde ao parágrafo do block ${edit.block} (texto atual: ${JSON.stringify(block.text)})`)
+      }
+      return true
     }
-    return true
+
+    if (TABLE_OPS.has(edit.operation)) {
+      if (block.kind !== 'table') return drop(`operação ${edit.operation} requer bloco table, mas block ${edit.block} é parágrafo`)
+      if (edit.operation === 'set_cell') {
+        const { row, col } = edit
+        if (typeof row !== 'number' || row < 0 || row >= block.n_rows) return drop(`row ${row} fora do intervalo (block ${edit.block} tem ${block.n_rows} linhas)`)
+        if (typeof col !== 'number' || col < 0 || col >= block.n_cols) return drop(`col ${col} fora do intervalo (block ${edit.block} tem ${block.n_cols} colunas)`)
+        if (!snippetMatches(block.rows[row]?.[col], edit.old_text_snippet)) {
+          return drop(`snippet não corresponde à célula (${edit.block},${row},${col}) (texto atual: ${JSON.stringify(block.rows[row]?.[col])})`)
+        }
+        return true
+      }
+      if (edit.operation === 'insert_row_after') {
+        const r = edit.after_row
+        if (typeof r !== 'number' || r < 0 || r >= block.n_rows) return drop(`after_row ${r} fora do intervalo (block ${edit.block} tem ${block.n_rows} linhas)`)
+        if (!Array.isArray(edit.new_row_cells) || edit.new_row_cells.length === 0) return drop(`insert_row_after exige new_row_cells em block ${edit.block}`)
+        return true
+      }
+      if (edit.operation === 'delete_row') {
+        const r = edit.row
+        if (typeof r !== 'number' || r < 0 || r >= block.n_rows) return drop(`row ${r} fora do intervalo (block ${edit.block} tem ${block.n_rows} linhas)`)
+        return true
+      }
+    }
+
+    return drop(`operação desconhecida: ${edit.operation}`)
   })
 
   if (invalidEdits.length > 0) {
@@ -238,7 +337,7 @@ Regras críticas:
 
   if (edits.length === 0) {
     return NextResponse.json(
-      { error: 'Nenhuma das edições propostas correspondeu ao texto atual do documento. Tente reformular o pedido de mudança.' },
+      { error: 'Nenhuma das edições propostas correspondeu à estrutura atual do documento. Tente reformular o pedido de mudança.' },
       { status: 400 }
     )
   }
@@ -251,9 +350,9 @@ Regras críticas:
   // Apply edits to the base document
   let newDocBuffer: Buffer
   try {
-    newDocBuffer = await applyEdits(baseBuffer, edits)
+    newDocBuffer = await applyStructuredEdits(baseBuffer, edits)
   } catch (err) {
-    console.error('[accept] applyEdits error:', err)
+    console.error('[accept] applyStructuredEdits error:', err)
     return NextResponse.json(
       { error: `Falha ao aplicar edições: ${(err as Error).message}` },
       { status: 500 }
@@ -291,5 +390,11 @@ Regras críticas:
     data: { statusAtual: Status.Pendente },
   })
 
-  return NextResponse.json({ versionId: updated.id, numeroVersao: updated.numeroVersao })
+  return NextResponse.json({
+    versionId: updated.id,
+    numeroVersao: updated.numeroVersao,
+    appliedEdits: edits.length,
+    proposedEdits: proposedEdits.length,
+    droppedEdits: invalidEdits.length,
+  })
 }
